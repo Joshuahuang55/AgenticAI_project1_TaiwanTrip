@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import os
 import uuid
@@ -7,17 +8,45 @@ import litellm
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from tools import TOOLS, run_tool
+HERE = Path(__file__).parent
+
+
+def load_dotenv(path: Path = HERE / ".env") -> None:
+    """Local dev only: read KEY=VALUE lines from .env. On Cloud Run, env vars are set on the service."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and not key.strip().startswith("#"):
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+load_dotenv()
+
+from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
 
 # --- Config ---
 
-SYSTEM_PROMPT = (
-    "You are a helpful assistant. When a question depends on the weather or "
-    "outdoor conditions, call get_weather first, then answer in a sentence."
-)
-MAX_TOOL_ROUNDS = 5
+SYSTEM_PROMPT = """You are "Taiwan Like a Local", a warm local friend helping foreign travelers plan trips in Taiwan.
+Today is {today}. Answer in the user's language (default English), concise and practical.
+
+Rules:
+- Lodging: always use legal_stay_check. Never recommend a hotel or B&B the tool did not return.
+  Registration means the place is licensed and bound by the rules (e.g. required liability insurance);
+  do not claim more than the tool returned. If a place is not registered, explain why that matters
+  (no official oversight or insurance guarantee) and offer registered alternatives.
+- Money: every conversion or budget number must come from twd_exchange. Do not do the math from memory.
+  If the user gives a budget in their currency and wants cheap stays, convert first, then pass max_price_twd.
+- Food: use find_local_food. Translate Chinese names and descriptions, but keep the Chinese name in
+  parentheses so the traveler can show it to locals.
+- If the city or dates are missing and matter, ask instead of guessing.
+- If a tool returns "error", follow its "hint". Never pretend you found data.
+- End with a short source line, e.g. "Sources: Taiwan Tourism Administration (TDX)."
+"""
+MAX_TOOL_ROUNDS = 8
 
 # --- The Harness ---
 
@@ -64,6 +93,7 @@ sessions: dict[str, list] = {}
 # --- FastAPI App ---
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
 
 class ChatRequest(BaseModel):
@@ -79,7 +109,7 @@ class ChatResponse(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(Path(__file__).parent / "index.html")
+    return FileResponse(HERE / "static" / "index.html")
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -87,7 +117,8 @@ def chat(request: ChatRequest):
     # Get or create the session
     session_id = request.session_id or str(uuid.uuid4())
     if session_id not in sessions:
-        sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        today = dt.date.today().strftime("%A, %Y-%m-%d")
+        sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT.format(today=today)}]
 
     # Append user's message to the context
     sessions[session_id] += [{"role": "user", "content": request.message}]

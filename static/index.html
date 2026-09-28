@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Taiwan Like a Local · your local friend for traveling Taiwan</title>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <link rel="stylesheet" href="/static/style.css" />
+    </head>
+    <body>
+        <header>
+            <div class="brand">
+                <span class="logo">台</span>
+                <div>
+                    <h1>Taiwan Like a Local</h1>
+                    <p>Your local friend for traveling Taiwan: registered stays, where locals eat, TWD budgets, holiday crowds and typhoon backups.</p>
+                </div>
+            </div>
+            <button id="new-trip" class="ghost" title="Start a new conversation">New trip</button>
+        </header>
+
+        <main>
+            <section id="chat">
+                <div id="messages">
+                    <div id="welcome">
+                        <h2>Hi! 你好! Where in Taiwan are you headed?</h2>
+                        <p>
+                            Ask me like you'd ask a friend who lives here. I look things up in official Taiwanese
+                            data (Tourism Administration via TDX, daily exchange rates) and show every lookup I make.
+                        </p>
+                        <div class="examples">
+                            <button class="example">I found a cheap B&amp;B in Hualien called "你來花蓮民宿". Is it legal? Can you suggest some registered ones?</button>
+                            <button class="example">I have $1,500 USD for a week. How much is that in TWD, and find me registered B&amp;Bs in Tainan under 3,000 TWD a night.</button>
+                            <button class="example">What should I eat in Tainan? I want beef soup for breakfast and a night market in the evening.</button>
+                        </div>
+                    </div>
+                </div>
+                <form id="composer">
+                    <input id="user-input" type="text" placeholder="e.g. Is this homestay in Jiufen registered?" autocomplete="off" />
+                    <button id="send-btn" type="submit">Send</button>
+                </form>
+            </section>
+
+            <aside id="panel">
+                <button id="panel-toggle" class="ghost" type="button">Show trip board</button>
+                <div id="panel-body">
+                    <div class="card map-card">
+                        <div class="card-title">Map <span class="legend" id="legend"></span></div>
+                        <div id="map"></div>
+                    </div>
+                    <div class="card" id="stay-card" hidden>
+                        <div class="card-title">Stay check</div>
+                        <div id="stay-body"></div>
+                    </div>
+                    <div class="card" id="dates-card" hidden>
+                        <div class="card-title">Your dates</div>
+                        <div id="dates-body" class="date-strip"></div>
+                    </div>
+                    <div class="card" id="weather-card" hidden>
+                        <div class="card-title">Weather</div>
+                        <div id="weather-body"></div>
+                    </div>
+                    <div class="card" id="budget-card" hidden>
+                        <div class="card-title">Budget</div>
+                        <div id="budget-body"></div>
+                    </div>
+                    <p class="panel-hint" id="panel-hint">Places, stay checks and budgets from the chat show up here.</p>
+                </div>
+            </aside>
+        </main>
+
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+        <script src="/static/app.js"></script>
+    </body>
+</html>

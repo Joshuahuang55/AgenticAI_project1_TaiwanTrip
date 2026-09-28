@@ -1,7 +1,7 @@
 [project]
 name = "gemini-web-tool-calling"
 version = "0.1.0"
-description = "qwen-tool-calling behind a web server: FastAPI + LiteLLM + Gemini, with tool calls shown in the UI"
+description = "Taiwan Like a Local: a travel copilot for foreigners visiting Taiwan (FastAPI + LiteLLM + Gemini + Taiwanese open data)"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.109.0",
@@ -10,3 +10,11 @@ dependencies = [
     "google-cloud-aiplatform>=1.40.0",
     "requests>=2.31",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
