@@ -2,23 +2,24 @@
 
 ## Project Structure & Module Organization
 
-`app.py` contains FastAPI routes and the LiteLLM agent loop. `tools/` holds the tool registry, TDX client, and data tools. `static/` contains the plain HTML, CSS, and JavaScript frontend; `tests/` contains pytest tests. See `README.md` for tool behavior.
+`app.py` contains FastAPI routes and the LiteLLM agent loop; `prompts/system.txt` supplies the system prompt. `tools/` holds the registry, TDX client, and data tools, including `tools/data/crowd_calibration.json`. `scripts/calibrate_crowd_risk.py` refreshes that data. `static/` is the plain HTML, CSS, and JavaScript frontend; `tests/` contains pytest tests. See `README.md` for tool behavior.
 
 ## Build, Test, and Development Commands
 
 - `uv run app.py`: start the app locally at `http://localhost:8000`.
 - `uv run pytest`: run the test suite; external data requests are mocked.
 - `uv sync --group dev`: install project and test dependencies from `uv.lock`.
+- `uv run python scripts/calibrate_crowd_risk.py`: refresh the bundled crowd calibration from official data files.
 
 Copy `.env.example` to `.env`, set TDX credentials, and configure Google Cloud application default credentials per `README.md`. `Procfile` defines the deployment command. The frontend has no build step.
 
 ## Coding Style & Naming Conventions
 
-Use four-space indentation and `snake_case` for Python functions and modules. Add tools in `tools/` and register them in `tools/__init__.py`. Return JSON strings with `error` and `hint` for recoverable failures. Follow nearby JavaScript and CSS style in `static/`; no formatter or linter is configured.
+Use four-space indentation and `snake_case` for Python functions and modules. Add tools in `tools/` and register them in `tools/__init__.py`. Keep tool descriptions aligned with `prompts/system.txt`. Return JSON strings with `error` and `hint` for recoverable failures. Follow nearby JavaScript and CSS style in `static/`; no formatter or linter is configured.
 
 ## Testing Guidelines
 
-Use pytest with `test_*.py` files and `test_*` functions. Test results, errors, and argument handling. Mock TDX and exchange-rate calls, following `tests/test_member_c_tools.py`. Run `uv run pytest` before a pull request; no coverage threshold is configured.
+Use pytest with `test_*.py` files and `test_*` functions. Cover results, errors, and argument handling. Mock network calls as in `tests/test_member_c_tools.py`, `tests/test_transport.py`, and `tests/test_holidays.py`. Pytest does not validate model behavior; after prompt edits, restart the app and inspect `/chat` tool calls. Run `uv run pytest` before a pull request; no coverage threshold is configured.
 
 ## API Limits & Live-Request Rules
 
