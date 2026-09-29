@@ -23,6 +23,7 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 | `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
 | `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets | Tourism Administration via TDX, plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
+| `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
 | `get_weather` | Starter placeholder, current weather | Open-Meteo |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
@@ -48,6 +49,7 @@ tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/lodging.py    legal_stay_check
 tools/food.py       find_local_food
 tools/exchange.py   twd_exchange
-static/             frontend (chat, tool cards, Leaflet map, trip board)
+tools/transport.py  hsr_trip_planner (THSR and TRA)
+static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
 tests/              tool tests
 ```

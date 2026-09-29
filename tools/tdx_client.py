@@ -12,7 +12,7 @@ import requests
 TOKEN_URL = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
 API_BASE = "https://tdx.transportdata.tw/api"
 TIMEOUT = 10
-CACHE_TTL = 6 * 60 * 60  # Tourism data changes rarely; the free tier allows ~5 calls/minute.
+CACHE_TTL = 6 * 60 * 60  # Avoid repeated requests to TDX's rate-limited APIs.
 
 _token = {"value": None, "expires_at": 0.0}
 _cache: dict[tuple, tuple[float, list | dict]] = {}
@@ -124,7 +124,7 @@ def tdx_get(path: str, params: dict) -> list | dict:
             return cached[1]
         return {
             "error": f"TDX request failed: {type(e).__name__}",
-            "hint": "The Taiwan tourism database is unreachable. Tell the user and suggest trying again shortly.",
+            "hint": "The TDX data service is unreachable. Tell the user and suggest trying again shortly.",
         }
 
     records = body.get("value", body) if isinstance(body, dict) else body

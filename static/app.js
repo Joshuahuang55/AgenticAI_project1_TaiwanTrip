@@ -214,6 +214,21 @@ function showDates(data) {
     $("dates-card").hidden = false;
 }
 
+function showTrains(data) {
+    const body = $("train-body");
+    const route = el("div", "train-route", `${data.rail} · ${data.origin} → ${data.destination} · ${data.date}`);
+    const list = el("ul", "train-list");
+    for (const train of data.trains || []) {
+        const item = el("li");
+        item.append(el("div", "train-time", `${train.departure} → ${train.arrival}`));
+        item.append(el("div", "train-type", `${train.train_type || "Type unavailable"} · Train ${train.train_no}`));
+        item.append(el("div", "train-fare", train.fare_twd == null ? "Fare unavailable" : `${train.fare_twd.toLocaleString()} TWD`));
+        list.append(item);
+    }
+    body.replaceChildren(route, list);
+    $("train-card").hidden = false;
+}
+
 function showWeather(data) {
     const bad = data.is_bad_weather || (data.typhoon_alert && data.typhoon_alert !== "none");
     const f = data.forecast || {};
@@ -233,10 +248,11 @@ function updateBoard(calls) {
         if (call.name === "legal_stay_check") showStay(data);
         if (call.name === "twd_exchange") showBudget(data);
         if (call.name === "crowd_risk_check") showDates(data);
+        if (call.name === "hsr_trip_planner" && data.trains?.length) showTrains(data);
         if (call.name === "typhoon_backup_plan") showWeather(data);
     }
     if (newPins.length) map.fitBounds(L.featureGroup(newPins).getBounds().pad(0.3), { maxZoom: 14 });
-    const anyCard = ["stay-card", "dates-card", "weather-card", "budget-card"].some((id) => !$(id).hidden);
+    const anyCard = ["stay-card", "dates-card", "train-card", "weather-card", "budget-card"].some((id) => !$(id).hidden);
     $("panel-hint").hidden = anyCard || pinLayer.getLayers().length > 0;
 }
 

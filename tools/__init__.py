@@ -5,12 +5,13 @@ To add a tool, write a module with a function and a SCHEMA, then register it bel
 
 import json
 
-from tools import exchange, food, lodging, starter_weather
+from tools import exchange, food, lodging, starter_weather, transport
 
 _MODULES = [
     (lodging.legal_stay_check, lodging.SCHEMA),
     (food.find_local_food, food.SCHEMA),
     (exchange.twd_exchange, exchange.SCHEMA),
+    (transport.hsr_trip_planner, transport.SCHEMA),
     (starter_weather.get_weather, starter_weather.SCHEMA),
 ]
 
