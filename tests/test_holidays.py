@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from tools import holidays, run_tool
+from scripts.calibrate_crowd_risk import build_calibration
 
 
 def _calendar_csv(year, changes=None):
@@ -53,18 +54,20 @@ def fake_calendars(monkeypatch):
     holidays._cache.clear()
 
 
-def test_long_break_marks_departure_and_return_days(fake_calendars):
+def test_tra_calibration_highlights_pre_break_eve(fake_calendars):
     _, calls = fake_calendars
     result = json.loads(run_tool("crowd_risk_check", {"start_date": "2026-10-08", "end_date": "2026-10-12"}))
     days = {day["date"]: day for day in result["days"]}
 
     assert [days[f"2026-10-{day:02d}"]["risk"] for day in range(8, 13)] == [
-        "medium", "high", "medium", "high", "low",
+        "high", "medium", "medium", "medium", "low",
     ]
     assert days["2026-10-09"]["holiday_name"] == "國慶日補假"
-    assert "outbound" in days["2026-10-09"]["reason"]
-    assert "return" in days["2026-10-11"]["reason"]
-    assert "not measured" in result["risk_basis"]
+    assert days["2026-10-08"]["historical_tra_evidence"] == {
+        "tra_median_ratio": 1.266, "sample_days": 5,
+    }
+    assert "0.99x" in days["2026-10-09"]["reason"]
+    assert "not HSR demand" in result["risk_basis"]
     assert calls == [2026]
 
 
@@ -81,7 +84,7 @@ def test_weekend_and_working_saturday(fake_calendars):
 def test_break_crosses_year_and_reuses_downloads(fake_calendars):
     _, calls = fake_calendars
     result = json.loads(holidays.crowd_risk_check("2026-12-31", "2027-01-03"))
-    assert [day["risk"] for day in result["days"]] == ["medium", "high", "medium", "high"]
+    assert [day["risk"] for day in result["days"]] == ["high", "medium", "medium", "medium"]
     assert calls == [2026, 2027]
 
     holidays.crowd_risk_check("2027-01-01", "2027-01-01")
@@ -92,6 +95,32 @@ def test_unpublished_next_year_keeps_estimate_uncertain(fake_calendars):
     day = json.loads(holidays.crowd_risk_check("2027-12-31", "2027-12-31"))["days"][0]
     assert day["risk"] == "medium"
     assert "unavailable" in day["reason"]
+
+
+def test_risk_responds_to_calibration_data(fake_calendars, monkeypatch):
+    baseline = json.loads(holidays.crowd_risk_check("2026-10-08", "2026-10-08"))["days"][0]
+    assert baseline["risk"] == "high"
+    changed = {**holidays.CALIBRATION, "categories": {
+        **holidays.CALIBRATION["categories"],
+        "long_break_eve": {"sample_days": 5, "median_ratio": 1.05},
+    }}
+    monkeypatch.setattr(holidays, "CALIBRATION", changed)
+    revised = json.loads(holidays.crowd_risk_check("2026-10-08", "2026-10-08"))["days"][0]
+    assert revised["risk"] == "medium"
+
+
+def test_calibration_compares_entries_to_nearby_matching_weekdays():
+    calendar = _calendar_csv(2026, {"2026-02-27": ("2", "補假")})
+    rows = []
+    day = dt.date(2026, 1, 1)
+    for _ in range(180):
+        rows.append({"trnOpDate": day.strftime("%Y%m%d"),
+                     "gateInComingCnt": "130" if day == dt.date(2026, 2, 26) else "100"})
+        day += dt.timedelta(days=1)
+    calibration = build_calibration(calendar, json.dumps(rows).encode())
+    assert calibration["categories"]["long_break_eve"] == {
+        "sample_days": 1, "median_ratio": 1.3,
+    }
 
 
 @pytest.mark.parametrize("start,end", [

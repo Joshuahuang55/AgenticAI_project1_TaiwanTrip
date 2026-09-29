@@ -6,6 +6,7 @@ import io
 import json
 import re
 import time
+from pathlib import Path
 
 import requests
 
@@ -17,6 +18,7 @@ CALENDAR_URLS = {
 CACHE_TTL = 24 * 60 * 60
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 _cache: dict[int, tuple[float, dict[dt.date, dict]]] = {}
+CALIBRATION = json.loads((Path(__file__).parent / "data" / "crowd_calibration.json").read_text(encoding="utf-8"))
 
 
 def _error(message: str, hint: str) -> str:
@@ -64,13 +66,14 @@ def _record(day: dt.date) -> dict | None:
     return calendar.get(day) if calendar is not None else None
 
 
-def _break_around(day: dt.date) -> tuple[dt.date, dt.date, bool]:
+def _break_around(day: dt.date, record=None) -> tuple[dt.date, dt.date, bool]:
     """Return the full known run of days off and whether it hits an unpublished year."""
+    record = record or _record
     first = last = day
     unknown = False
     while first > dt.date.min:
         previous = first - dt.timedelta(days=1)
-        row = _record(previous)
+        row = record(previous)
         if row is None:
             unknown = True
             break
@@ -79,7 +82,7 @@ def _break_around(day: dt.date) -> tuple[dt.date, dt.date, bool]:
         first = previous
     while last < dt.date.max:
         following = last + dt.timedelta(days=1)
-        row = _record(following)
+        row = record(following)
         if row is None:
             unknown = True
             break
@@ -89,30 +92,64 @@ def _break_around(day: dt.date) -> tuple[dt.date, dt.date, bool]:
     return first, last, unknown
 
 
-def _risk(day: dt.date, row: dict) -> tuple[str, str]:
+def _day_type(day: dt.date, row: dict, record=None) -> str:
+    """Classify a calendar day without using passenger counts."""
+    record = record or _record
     if not row["is_holiday"]:
         if day.weekday() >= 5:
-            return "low", "Scheduled working weekend."
+            return "working_weekend"
         tomorrow = day + dt.timedelta(days=1)
-        next_row = _record(tomorrow)
+        next_row = record(tomorrow)
         if next_row and next_row["is_holiday"]:
-            first, last, unknown = _break_around(tomorrow)
+            first, last, unknown = _break_around(tomorrow, record)
             if not unknown and (last - first).days >= 2:
-                return "medium", "Working day before a break of at least three days; outbound travel may increase."
-        return "low", "Scheduled working day; no holiday travel signal."
+                return "long_break_eve"
+        return "workday"
 
-    first, last, unknown = _break_around(day)
+    first, last, unknown = _break_around(day, record)
     if unknown:
-        return "medium", "Day off; an adjacent year's calendar is unavailable, so break length is uncertain."
+        return "uncertain_break"
     if (last - first).days >= 2:
         if day == first:
-            return "high", "First day of a break of at least three days; outbound travel may increase."
+            return "long_break_first"
         if day == last:
-            return "high", "Last day of a break of at least three days; return travel may increase."
-        return "medium", "Middle day of a break of at least three days."
+            return "long_break_last"
+        return "long_break_middle"
     if row["note"]:
-        return "medium", "Official day off; travel may be busier than a working day."
-    return "medium", "Regular weekend day."
+        return "single_holiday"
+    return "weekend"
+
+
+REASONS = {
+    "workday": "Scheduled working day; no holiday travel signal.",
+    "working_weekend": "Scheduled working weekend.",
+    "long_break_eve": "Working day before a long break.",
+    "long_break_first": "First day of a long break; individual trains may differ from the network average.",
+    "long_break_middle": "Middle day of a long break; demand may vary by destination and train.",
+    "long_break_last": "Last day of a long break; individual trains may differ from the network average.",
+    "single_holiday": "Official day off; demand may vary by destination and train.",
+    "weekend": "Regular weekend day; demand may vary by destination and train.",
+    "uncertain_break": "Day off; an adjacent year's calendar is unavailable, so break length is uncertain.",
+}
+
+
+def _risk(day_type: str) -> tuple[str, str, dict | None]:
+    stats = CALIBRATION["categories"].get(day_type)
+    if day_type in {"workday", "working_weekend"}:
+        level = "low"
+    elif day_type == "weekend":
+        level = "medium"
+    elif (stats and stats["sample_days"] >= CALIBRATION["minimum_samples"]
+          and stats["median_ratio"] >= CALIBRATION["high_ratio_threshold"]):
+        level = "high"
+    else:
+        level = "medium"
+    evidence = ({"tra_median_ratio": stats["median_ratio"], "sample_days": stats["sample_days"]}
+                if stats and stats["sample_days"] >= CALIBRATION["minimum_samples"] else None)
+    reason = REASONS[day_type]
+    if evidence and day_type not in {"workday", "working_weekend", "weekend"}:
+        reason += f" Historical TRA entries: {stats['median_ratio']:.2f}x comparable days ({stats['sample_days']} sampled days)."
+    return level, reason, evidence
 
 
 def crowd_risk_check(start_date: str, end_date: str) -> str:
@@ -139,15 +176,18 @@ def crowd_risk_check(start_date: str, end_date: str) -> str:
         for offset in range((end - start).days + 1):
             day = start + dt.timedelta(days=offset)
             row = _record(day)
-            risk, reason = _risk(day, row)
+            day_type = _day_type(day, row)
+            risk, reason, evidence = _risk(day_type)
             days.append({
                 "date": day.isoformat(),
                 "weekday": day.strftime("%a"),
                 "is_holiday": row["is_holiday"],
                 "holiday_name": row["note"] if row["is_holiday"] and row["note"] else None,
                 "calendar_note": row["note"] or None,
+                "calendar_pattern": day_type,
                 "risk": risk,
                 "reason": reason,
+                "historical_tra_evidence": evidence,
             })
     except RuntimeError:
         return _error(
@@ -158,7 +198,13 @@ def crowd_risk_check(start_date: str, end_date: str) -> str:
         "start_date": start_date,
         "end_date": end_date,
         "days": days,
-        "risk_basis": "Calendar-based estimate, not measured crowding or seat availability.",
+        "risk_basis": "Preliminary calendar and TRA station-entry estimate; not HSR demand, train occupancy, or seat availability.",
+        "historical_source": {
+            "url": CALIBRATION["ridership_source"],
+            "period_start": CALIBRATION["period_start"],
+            "period_end": CALIBRATION["period_end"],
+            "method": CALIBRATION["method"],
+        },
         "source": SOURCE,
     }, ensure_ascii=False)
 
@@ -170,8 +216,8 @@ SCHEMA = {
         "description": (
             "Check Taiwan's official government calendar for days off and estimate travel pressure "
             "for a trip of up to 30 days. Use for dated Taiwan itineraries or questions about "
-            "holiday travel. High risk marks the first and last days of long breaks; this is a "
-            "calendar heuristic, not live passenger or ticket data."
+            "holiday travel. Uses historical TRA station entries to calibrate holiday patterns. "
+            "This is a network-level estimate, not live passenger or ticket data."
         ),
         "parameters": {
             "type": "object",
