@@ -50,7 +50,8 @@ environment variables on the service. Keep max instances at 1: sessions are stor
 ## Layout
 
 ```
-app.py              routes, session store, agent loop, system prompt
+app.py              routes, session store, agent loop
+prompts/system.txt  system prompt (with {today} filled in at session start)
 tools/__init__.py   tool registry (TOOLS + run_tool)
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/lodging.py    legal_stay_check

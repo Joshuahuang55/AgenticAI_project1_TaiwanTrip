@@ -98,8 +98,9 @@ SCHEMA = {
         "name": "twd_exchange",
         "description": (
             "Convert money between New Taiwan Dollars (TWD) and another currency using today's market "
-            "rate, and compare it with the 30-day average. Use for ANY money conversion or budget "
-            "question; never do the math from memory. Data only, not investment advice."
+            "rate, and compare it with the 30-day average. Use for currency conversions and "
+            "exchange rates when estimating a budget. It does not provide travel prices. "
+            "Data only, not investment advice."
         ),
         "parameters": {
             "type": "object",
