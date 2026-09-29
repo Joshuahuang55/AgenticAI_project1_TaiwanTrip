@@ -1,0 +1,40 @@
+{
+  "period_start": "2026-01-01",
+  "period_end": "2026-09-01",
+  "calendar_source": "https://data.gov.tw/dataset/14718",
+  "ridership_source": "https://data.gov.tw/dataset/8792",
+  "ridership_download": "https://ods.railway.gov.tw/tra-ods-web/ods/download/dataResource/8ae4cabf6973990e0169947ed32454b9",
+  "method": "Median daily TRA station entries versus ordinary days of the same weekday within 56 days; network-wide, not route-specific.",
+  "minimum_samples": 5,
+  "high_ratio_threshold": 1.2,
+  "categories": {
+    "long_break_eve": {
+      "sample_days": 5,
+      "median_ratio": 1.266
+    },
+    "long_break_first": {
+      "sample_days": 5,
+      "median_ratio": 0.994
+    },
+    "long_break_last": {
+      "sample_days": 5,
+      "median_ratio": 1.03
+    },
+    "long_break_middle": {
+      "sample_days": 12,
+      "median_ratio": 1.011
+    },
+    "uncertain_break": {
+      "sample_days": 1,
+      "median_ratio": 0.971
+    },
+    "weekend": {
+      "sample_days": 58,
+      "median_ratio": 1.0
+    },
+    "workday": {
+      "sample_days": 158,
+      "median_ratio": 1.0
+    }
+  }
+}
