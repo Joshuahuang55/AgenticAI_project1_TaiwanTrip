@@ -13,6 +13,8 @@ and a trip board (map, stay check, budget) is drawn from the tool results.
    → `twd_exchange` (with a 30-day comparison), then `legal_stay_check` with a price cap.
 3. `What should I eat in Tainan? I want beef soup for breakfast and a night market in the evening.`
    → `find_local_food` for 牛肉湯 and for night markets, including which days Tainan's rotating night markets open.
+4. `I'm taking the train from Taipei to Tainan on Oct 9, 2026. Will the holiday make travel busy?`
+   → `crowd_risk_check` identifies the long-weekend travel peak; `hsr_trip_planner` lists trains. The risk is an estimate, not a live seat count.
 
 Follow-up to test memory: after query 2, ask `Is the second one you listed registered? Double check it.`
 
@@ -24,6 +26,7 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 | `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets | Tourism Administration via TDX, plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
+| `crowd_risk_check` ⭐ | Official days off and calendar-based travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) |
 | `get_weather` | Starter placeholder, current weather | Open-Meteo |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
@@ -50,6 +53,7 @@ tools/lodging.py    legal_stay_check
 tools/food.py       find_local_food
 tools/exchange.py   twd_exchange
 tools/transport.py  hsr_trip_planner (THSR and TRA)
+tools/holidays.py   crowd_risk_check (official calendar, estimated travel pressure)
 static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
 tests/              tool tests
 ```

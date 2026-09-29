@@ -211,6 +211,7 @@ function showDates(data) {
         cell.append(el("span", "", d.weekday || ""), el("b", "", (d.date || "").slice(5)), el("span", "", d.holiday_name || d.risk || ""));
         strip.append(cell);
     }
+    $("dates-note").textContent = data.risk_basis || "";
     $("dates-card").hidden = false;
 }
 

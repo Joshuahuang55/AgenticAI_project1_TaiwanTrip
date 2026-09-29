@@ -1,0 +1,185 @@
+"""Estimate holiday travel pressure from Taiwan's official office calendar."""
+
+import csv
+import datetime as dt
+import io
+import json
+import re
+import time
+
+import requests
+
+SOURCE = "https://data.gov.tw/dataset/14718"
+CALENDAR_URLS = {
+    2026: "https://www.dgpa.gov.tw/uploads/dgpa/files/202506/a52331bd-a189-466b-b0f0-cae3062bbf74.csv",
+    2027: "https://www.dgpa.gov.tw/uploads/dgpa/files/202607/f538b1ff-ba60-4c63-9477-10db8e6612d1.csv",
+}
+CACHE_TTL = 24 * 60 * 60
+DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+_cache: dict[int, tuple[float, dict[dt.date, dict]]] = {}
+
+
+def _error(message: str, hint: str) -> str:
+    return json.dumps({"error": message, "hint": hint})
+
+
+def _parse_calendar(content: bytes, year: int) -> dict[dt.date, dict]:
+    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+    if not {"西元日期", "是否放假", "備註"}.issubset(reader.fieldnames or []):
+        raise ValueError("missing calendar columns")
+
+    days = {}
+    for row in reader:
+        day = dt.datetime.strptime(row["西元日期"], "%Y%m%d").date()
+        flag = row["是否放假"]
+        if day.year != year or day in days or flag not in {"0", "2"}:
+            raise ValueError("invalid calendar row")
+        days[day] = {"is_holiday": flag == "2", "note": (row["備註"] or "").strip()}
+
+    expected_days = (dt.date(year + 1, 1, 1) - dt.date(year, 1, 1)).days
+    if len(days) != expected_days:
+        raise ValueError("incomplete calendar")
+    return days
+
+
+def _load_year(year: int) -> dict[dt.date, dict] | None:
+    url = CALENDAR_URLS.get(year)
+    if url is None:
+        return None
+    cached = _cache.get(year)
+    if cached and time.monotonic() - cached[0] < CACHE_TTL:
+        return cached[1]
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        days = _parse_calendar(response.content, year)
+    except (requests.RequestException, csv.Error, UnicodeError, ValueError, TypeError) as exc:
+        raise RuntimeError(f"Could not load the {year} government calendar") from exc
+    _cache[year] = (time.monotonic(), days)
+    return days
+
+
+def _record(day: dt.date) -> dict | None:
+    calendar = _load_year(day.year)
+    return calendar.get(day) if calendar is not None else None
+
+
+def _break_around(day: dt.date) -> tuple[dt.date, dt.date, bool]:
+    """Return the full known run of days off and whether it hits an unpublished year."""
+    first = last = day
+    unknown = False
+    while first > dt.date.min:
+        previous = first - dt.timedelta(days=1)
+        row = _record(previous)
+        if row is None:
+            unknown = True
+            break
+        if not row["is_holiday"]:
+            break
+        first = previous
+    while last < dt.date.max:
+        following = last + dt.timedelta(days=1)
+        row = _record(following)
+        if row is None:
+            unknown = True
+            break
+        if not row["is_holiday"]:
+            break
+        last = following
+    return first, last, unknown
+
+
+def _risk(day: dt.date, row: dict) -> tuple[str, str]:
+    if not row["is_holiday"]:
+        if day.weekday() >= 5:
+            return "low", "Scheduled working weekend."
+        tomorrow = day + dt.timedelta(days=1)
+        next_row = _record(tomorrow)
+        if next_row and next_row["is_holiday"]:
+            first, last, unknown = _break_around(tomorrow)
+            if not unknown and (last - first).days >= 2:
+                return "medium", "Working day before a break of at least three days; outbound travel may increase."
+        return "low", "Scheduled working day; no holiday travel signal."
+
+    first, last, unknown = _break_around(day)
+    if unknown:
+        return "medium", "Day off; an adjacent year's calendar is unavailable, so break length is uncertain."
+    if (last - first).days >= 2:
+        if day == first:
+            return "high", "First day of a break of at least three days; outbound travel may increase."
+        if day == last:
+            return "high", "Last day of a break of at least three days; return travel may increase."
+        return "medium", "Middle day of a break of at least three days."
+    if row["note"]:
+        return "medium", "Official day off; travel may be busier than a working day."
+    return "medium", "Regular weekend day."
+
+
+def crowd_risk_check(start_date: str, end_date: str) -> str:
+    """Return daily holiday facts and an explainable travel-pressure estimate."""
+    try:
+        if not DATE_PATTERN.fullmatch(start_date) or not DATE_PATTERN.fullmatch(end_date):
+            raise ValueError
+        start, end = dt.date.fromisoformat(start_date), dt.date.fromisoformat(end_date)
+    except (TypeError, ValueError):
+        return _error("Dates must use YYYY-MM-DD.", "Ask for valid start_date and end_date values.")
+    if end < start:
+        return _error("end_date is before start_date.", "Ask for a date range in chronological order.")
+    if (end - start).days >= 30:
+        return _error("Date range exceeds 30 days.", "Ask for a range of at most 30 calendar days.")
+    missing = [year for year in range(start.year, end.year + 1) if year not in CALENDAR_URLS]
+    if missing:
+        return _error(
+            f"The official calendar is unavailable for {', '.join(map(str, missing))}.",
+            "Ask for a year with a published calendar; do not guess holiday dates.",
+        )
+
+    try:
+        days = []
+        for offset in range((end - start).days + 1):
+            day = start + dt.timedelta(days=offset)
+            row = _record(day)
+            risk, reason = _risk(day, row)
+            days.append({
+                "date": day.isoformat(),
+                "weekday": day.strftime("%a"),
+                "is_holiday": row["is_holiday"],
+                "holiday_name": row["note"] if row["is_holiday"] and row["note"] else None,
+                "calendar_note": row["note"] or None,
+                "risk": risk,
+                "reason": reason,
+            })
+    except RuntimeError:
+        return _error(
+            "The government holiday calendar could not be loaded.",
+            "Tell the user the crowd-risk lookup is unavailable; do not invent holiday dates.",
+        )
+    return json.dumps({
+        "start_date": start_date,
+        "end_date": end_date,
+        "days": days,
+        "risk_basis": "Calendar-based estimate, not measured crowding or seat availability.",
+        "source": SOURCE,
+    }, ensure_ascii=False)
+
+
+SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "crowd_risk_check",
+        "description": (
+            "Check Taiwan's official government calendar for days off and estimate travel pressure "
+            "for a trip of up to 30 days. Use for dated Taiwan itineraries or questions about "
+            "holiday travel. High risk marks the first and last days of long breaks; this is a "
+            "calendar heuristic, not live passenger or ticket data."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "First date, YYYY-MM-DD."},
+                "end_date": {"type": "string", "description": "Last date, YYYY-MM-DD; inclusive, at most 30 days."},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+}
