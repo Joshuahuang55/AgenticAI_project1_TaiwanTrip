@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import io
 import json
+import ssl
 
 import pytest
 import requests
@@ -49,7 +50,7 @@ def fake_calendars(monkeypatch):
         calls.append(year)
         return Response(files[year])
 
-    monkeypatch.setattr(holidays.requests, "get", get)
+    monkeypatch.setattr(holidays._http, "get", get)
     yield files, calls
     holidays._cache.clear()
 
@@ -146,6 +147,13 @@ def test_download_and_format_failures_return_hints(fake_calendars, monkeypatch):
     def fail(*args, **kwargs):
         raise requests.Timeout("service unavailable")
 
-    monkeypatch.setattr(holidays.requests, "get", fail)
+    monkeypatch.setattr(holidays._http, "get", fail)
     result = json.loads(holidays.crowd_risk_check("2026-10-09", "2026-10-09"))
     assert "error" in result and "hint" in result
+
+
+def test_dgpa_tls_keeps_verification_but_not_strict_profile():
+    url = holidays.CALENDAR_URLS[2026]
+    ctx = holidays._http.get_adapter(url).poolmanager.connection_pool_kw["ssl_context"]
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    assert not ctx.verify_flags & ssl.VERIFY_X509_STRICT

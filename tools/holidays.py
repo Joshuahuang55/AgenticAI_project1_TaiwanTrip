@@ -10,12 +10,16 @@ from pathlib import Path
 
 import requests
 
+from tools.gov_tls import gov_session
+
 SOURCE = "https://data.gov.tw/dataset/14718"
 CALENDAR_URLS = {
     2026: "https://www.dgpa.gov.tw/uploads/dgpa/files/202506/a52331bd-a189-466b-b0f0-cae3062bbf74.csv",
     2027: "https://www.dgpa.gov.tw/uploads/dgpa/files/202607/f538b1ff-ba60-4c63-9477-10db8e6612d1.csv",
 }
 CACHE_TTL = 24 * 60 * 60
+# DGPA's certificate fails Python 3.13+'s strict profile; see tools/gov_tls.py.
+_http = gov_session("https://www.dgpa.gov.tw")
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 _cache: dict[int, tuple[float, dict[dt.date, dict]]] = {}
 CALIBRATION = json.loads((Path(__file__).parent / "data" / "crowd_calibration.json").read_text(encoding="utf-8"))
@@ -52,7 +56,7 @@ def _load_year(year: int) -> dict[dt.date, dict] | None:
     if cached and time.monotonic() - cached[0] < CACHE_TTL:
         return cached[1]
     try:
-        response = requests.get(url, timeout=10)
+        response = _http.get(url, timeout=10)
         response.raise_for_status()
         days = _parse_calendar(response.content, year)
     except (requests.RequestException, csv.Error, UnicodeError, ValueError, TypeError) as exc:

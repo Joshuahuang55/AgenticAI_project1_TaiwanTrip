@@ -29,6 +29,13 @@ HOURS = {"AttractionID": "A1", "ServiceTimes": [
 FEES = {"AttractionID": "A1", "Fees": [{"Name": "全票", "Price": 100}, {"Name": "半票", "Price": 50}]}
 
 
+@pytest.fixture(autouse=True)
+def fresh_session(monkeypatch):
+    """Each test starts in its own empty chat session."""
+    monkeypatch.setattr(attractions, "_seen_by_session", {})
+    attractions.use_session("test")
+
+
 @pytest.fixture
 def fake_tdx(monkeypatch):
     """Replace tdx_get with a fake that answers by endpoint; returns (calls, data)."""
@@ -187,7 +194,6 @@ def test_names_expands_picks_from_recent_search_without_tdx(fake_tdx):
 
 def test_names_falls_back_to_one_tdx_query(fake_tdx, monkeypatch):
     calls, data = fake_tdx
-    monkeypatch.setattr(attractions, "_seen", {})
     data[attractions.ATTRACTION_PATH] = [TEMPLE]
     out = json.loads(attractions.find_attractions("Tainan", names=["南鯤鯓代天府", "不存在的地方"]))
     assert [r["name"] for r in out["results"]] == ["南鯤鯓代天府"]
@@ -206,17 +212,15 @@ def test_palace_museum_is_not_a_temple(fake_tdx):
 
 def test_pins_only_places_named_in_the_answer(fake_tdx, monkeypatch):
     _, data = fake_tdx
-    monkeypatch.setattr(attractions, "_seen", {})
     xiangshan = dict(PORT, AttractionID="X1", AttractionName="南港山系_象山親山步道", PositionLat=25.03)
     data[attractions.ATTRACTION_PATH] = [xiangshan, TEMPLE, SHRINE]
     out = json.loads(attractions.find_attractions("Tainan"))
     assert all("lat" not in r for r in out["results"])  # candidates are never pinned
     answer = "Go to Elephant Mountain (象山親山步道) and 南鯤鯓代天府."
     pins = attractions.pins_from_answer(answer)
-    names = [r["name"] for r in json.loads(pins["result"])["results"]]
-    assert names == ["南港山系_象山親山步道", "南鯤鯓代天府"]
-    assert json.loads(pins["result"])["results"][0]["lat"] == 25.03
-    assert attractions.pins_from_answer("No Chinese names here.") is None
+    assert [r["name"] for r in pins] == ["南港山系_象山親山步道", "南鯤鯓代天府"]
+    assert pins[0]["lat"] == 25.03
+    assert attractions.pins_from_answer("No Chinese names here.") == []
 
 
 def test_name_matches_come_before_description_mentions(fake_tdx):
@@ -232,20 +236,32 @@ def test_name_matches_come_before_description_mentions(fake_tdx):
 def test_answer_pins_ignore_names_inside_longer_names(monkeypatch):
     area = dict(PORT, AttractionID="Q1", AttractionName="擎天崗", PositionLat=25.16)
     canal = dict(PORT, AttractionID="Q2", AttractionName="擎天崗系_坪頂古圳步道", PositionLat=25.13)
-    monkeypatch.setattr(attractions, "_seen", {r["AttractionName"]: r for r in (area, canal)})
+    attractions._seen().update({r["AttractionName"]: r for r in (area, canal)})
     pins = attractions.pins_from_answer("Walk the canal trail (擎天崗系_坪頂古圳步道).")
-    assert [r["name"] for r in json.loads(pins["result"])["results"]] == ["擎天崗系_坪頂古圳步道"]
+    assert [r["name"] for r in pins] == ["擎天崗系_坪頂古圳步道"]
 
 
 def test_answer_pins_match_shortened_name_in_parentheses(monkeypatch):
     confucius = dict(PORT, AttractionID="C1", AttractionName="孔廟文化園區「臺南孔子廟」", PositionLat=22.99)
-    monkeypatch.setattr(attractions, "_seen", {confucius["AttractionName"]: confucius})
+    attractions._seen().update({confucius["AttractionName"]: confucius})
     pins = attractions.pins_from_answer("Confucius Temple (臺南孔子廟) is a must.")
-    assert json.loads(pins["result"])["results"][0]["lat"] == 22.99
+    assert pins[0]["lat"] == 22.99
 
 
 def test_answer_pins_split_alternative_names(monkeypatch):
     street = dict(PORT, AttractionID="S1", AttractionName="安平老街(延平老街)", PositionLat=23.0)
-    monkeypatch.setattr(attractions, "_seen", {street["AttractionName"]: street})
+    attractions._seen().update({street["AttractionName"]: street})
     pins = attractions.pins_from_answer("Anping Old Street (安平老街 / 延平老街) is Taiwan's oldest street.")
-    assert [r["name"] for r in json.loads(pins["result"])["results"]] == ["安平老街(延平老街)"]
+    assert [r["name"] for r in pins] == ["安平老街(延平老街)"]
+
+
+def test_sessions_do_not_share_recent_searches():
+    temple = dict(PORT, AttractionID="T9", AttractionName="赤崁樓", PositionLat=23.0)
+    attractions.use_session("traveler-a")
+    attractions._seen().update({temple["AttractionName"]: temple})
+    assert [r["name"] for r in attractions.pins_from_answer("See 赤崁樓.")] == ["赤崁樓"]
+    attractions.use_session("traveler-b")
+    assert attractions.pins_from_answer("See 赤崁樓.") == []
+    attractions.forget_session("traveler-a")
+    attractions.use_session("traveler-a")
+    assert attractions.pins_from_answer("See 赤崁樓.") == []

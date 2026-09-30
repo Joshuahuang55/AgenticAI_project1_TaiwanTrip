@@ -84,7 +84,7 @@ async function send(text) {
         sessionId = data.session_id;
         sessionStorage.setItem("session_id", sessionId);
         renderToolCalls(data.tool_calls || [], loading);
-        updateBoard(data.tool_calls || []);
+        updateBoard(data.tool_calls || [], data.map_pins || []);
         loading.classList.remove("loading");
         loading.innerHTML = DOMPurify.sanitize(marked.parse(data.response || "(no answer)"));
     } catch (e) {
@@ -240,8 +240,10 @@ function showWeather(data) {
     $("weather-card").hidden = false;
 }
 
-function updateBoard(calls) {
+function updateBoard(calls, mapPins = []) {
     const newPins = [];
+    // Sights the answer recommends arrive in map_pins, not as a tool call.
+    if (mapPins.length) newPins.push(...addPins({ name: "find_attractions" }, { results: mapPins }));
     for (const call of calls) {
         const data = parse(call.result);
         if (!data || data.error) continue;

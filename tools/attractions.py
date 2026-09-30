@@ -2,6 +2,7 @@
 
 import json
 import re
+from contextvars import ContextVar
 
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
@@ -50,9 +51,28 @@ MAX_ROWS = 500  # TDX rejects $top above 500 (HTTP 400).
 # TDX returns rows in ID order (Tainan's first 50 are all rural north), so fetch the whole city up to
 # the cap and let the model pick famous places from every district. Tainan has 545 listings.
 RANK_POOL = MAX_ROWS
-# AttractionName -> full row from recent searches, so a place picked from more_candidates can be
-# expanded (address, coordinates for a map pin) without another TDX call. In-process only.
-_seen: dict[str, dict] = {}
+# session_id -> {AttractionName: full row} from that session's recent searches, so a place picked from
+# more_candidates can be expanded (address, coordinates for a map pin) without another TDX call.
+# Kept per session so one traveler's searches never show up on another traveler's map. In-process only.
+_seen_by_session: dict[str, dict[str, dict]] = {}
+_session: ContextVar[str] = ContextVar("attractions_session", default="")
+MAX_SESSIONS = 200
+
+
+def use_session(session_id: str) -> None:
+    """Scope recent-search memory to this chat session. Call once per /chat request."""
+    _session.set(session_id)
+
+
+def forget_session(session_id: str) -> None:
+    _seen_by_session.pop(session_id, None)
+
+
+def _seen() -> dict[str, dict]:
+    sid = _session.get()
+    if sid not in _seen_by_session and len(_seen_by_session) >= MAX_SESSIONS:
+        _seen_by_session.pop(next(iter(_seen_by_session)))  # drop the oldest session
+    return _seen_by_session.setdefault(sid, {})
 
 DAY_ABBR = {"Monday": "Mon", "Tuesday": "Tue", "Wednesday": "Wed", "Thursday": "Thu",
             "Friday": "Fri", "Saturday": "Sat", "Sunday": "Sun"}
@@ -201,7 +221,7 @@ def _details(county: str, names: list[str]) -> str:
     """Full listings for places the model picked by name, from recent searches or one TDX call."""
     names = [n.strip() for n in names if n and n.strip()][:10]
     def recent(n: str) -> dict | None:
-        return next((r for key, r in _seen.items()
+        return next((r for key, r in _seen().items()
                      if (r.get("PostalAddress") or {}).get("City") == county and n in key), None)
     found = {n: recent(n) for n in names}
     missing = [n for n, r in found.items() if r is None]
@@ -227,13 +247,14 @@ def _details(county: str, names: list[str]) -> str:
     }, ensure_ascii=False)
 
 
-def pins_from_answer(answer: str) -> dict | None:
-    """Map pins for the places the final answer actually recommends: listings from recent searches
+def pins_from_answer(answer: str) -> list[dict]:
+    """Map pins for the places the final answer actually recommends: listings from this session's searches
     whose Chinese name (or the part after the series prefix, e.g. 象山親山步道) appears in the text.
     Needs no TDX call and no extra model step, so the map shows picks, not every candidate."""
     # Longest names first, and each match is blanked out, so 擎天崗 does not also match inside
     # 擎天崗系_坪頂古圳步道. Results keep the order the answer mentions them.
-    forms = sorted(((form, r) for name, r in _seen.items()
+    seen = _seen()
+    forms = sorted(((form, r) for name, r in seen.items()
                     for form in {name, name.rsplit("_", 1)[-1]} if len(form) >= 3),
                    key=lambda fr: len(fr[0]), reverse=True)
     found = []
@@ -247,20 +268,11 @@ def pins_from_answer(answer: str) -> dict | None:
     # "(安平老街 / 延平老街)" is tried part by part.
     for m in re.finditer(r"[(（]([^()（）]{3,40})[)）]", answer):
         for part in re.split(r"\s*[/／、,，]\s*", m.group(1).strip()):
-            hits = [r for name, r in _seen.items() if len(part) >= 3 and part in name]
+            hits = [r for name, r in seen.items() if len(part) >= 3 and part in name]
             if len(hits) == 1 and all(hits[0] is not other for _, other in found):
                 found.append((m.start(), hits[0]))
     picked = [r for _, r in sorted(found, key=lambda x: x[0])]
-    if not picked:
-        return None
-    return {
-        "name": "find_attractions",
-        "args": {"city": (picked[0].get("PostalAddress") or {}).get("City"), "keyword": "recommended"},
-        "result": json.dumps({
-            "results": [_summarize(r, {}, {}) for r in picked],
-            "source": "Taiwan Tourism Administration via TDX",
-        }, ensure_ascii=False),
-    }
+    return [_summarize(r, {}, {}) for r in picked]
 
 
 def find_attractions(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
@@ -295,9 +307,10 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         return json.dumps(rows, ensure_ascii=False)
 
     rows = [r for r in rows if r.get("ServiceStatus") not in CLOSED_STATUS]
-    if len(_seen) > 5000:
-        _seen.clear()
-    _seen.update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
+    seen = _seen()
+    if len(seen) > 5000:
+        seen.clear()
+    seen.update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
     ranked = _dedupe(_rank(rows, words))
     named = [r for r in ranked if not words or any(_has(r.get("AttractionName") or "", w) for w in words)]
     rows = _spread(named, limit)

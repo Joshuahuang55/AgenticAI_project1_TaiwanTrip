@@ -3,14 +3,13 @@
 import datetime as dt
 import json
 import os
-import ssl
 import time
 from zoneinfo import ZoneInfo
 
 import requests
-from requests.adapters import HTTPAdapter
 
 from tools import attractions
+from tools.gov_tls import gov_session
 from tools.tdx_client import city_choices, resolve_city
 
 CWA_BASE = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/"
@@ -27,19 +26,8 @@ INDOOR_WORDS = (*attractions.KEYWORDS["museum"], "展示館", "文化館", "觀�
 _cache: dict[tuple, tuple[float, dict]] = {}
 
 
-class _CwaTLS(HTTPAdapter):
-    """CWA's certificate lacks a Subject Key Identifier, which Python 3.13+ rejects under
-    VERIFY_X509_STRICT. Keep full chain and hostname checks; drop only that strict profile."""
-
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = ssl.create_default_context()
-        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
-
-
-_http = requests.Session()
-_http.mount("https://opendata.cwa.gov.tw", _CwaTLS())
+# CWA's certificate fails Python 3.13+'s strict profile; see tools/gov_tls.py.
+_http = gov_session("https://opendata.cwa.gov.tw")
 
 
 def _cwa_get(dataset: str, params: dict) -> dict:
