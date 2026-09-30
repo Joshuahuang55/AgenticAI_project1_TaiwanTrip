@@ -1,0 +1,143 @@
+import datetime as dt
+import json
+import os
+import uuid
+from pathlib import Path
+
+import litellm
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+HERE = Path(__file__).parent
+
+
+def load_dotenv(path: Path = HERE / ".env") -> None:
+    """Local dev only: read KEY=VALUE lines from .env. On Cloud Run, env vars are set on the service."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and not key.strip().startswith("#"):
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+load_dotenv()
+
+from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
+from tools import attractions  # noqa: E402
+
+# --- Config ---
+
+SYSTEM_PROMPT = (HERE / "prompts" / "system.txt").read_text(encoding="utf-8")
+MAX_TOOL_ROUNDS = 8
+
+# --- The Harness ---
+
+
+def run_agent(messages: list[dict]) -> tuple[str, list[dict]]:
+    """Complete until the model answers without asking for a tool.
+
+    Returns the final text and a record of every tool call made along the way.
+    """
+    tool_calls = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        reply = litellm.completion(
+            model="vertex_ai/gemini-3.5-flash-lite",
+            vertex_location="global",
+            messages=messages,
+            tools=TOOLS,
+        ).choices[0].message
+
+        # Append assistant's reply (text, tool calls, or both) to the context.
+        # model_dump() keeps it a plain dict: the raw object carries provider-specific
+        # fields that trip Pydantic when LiteLLM re-serializes it next round.
+        messages += [reply.model_dump()]
+
+        if not reply.tool_calls:
+            return reply.content, tool_calls
+
+        # The harness, not the model, runs each tool and appends the result
+        for call in reply.tool_calls:
+            # Every tool call needs a tool reply, or the session's history is broken for later turns.
+            try:
+                args = json.loads(call.function.arguments or "{}")
+                result = run_tool(call.function.name, args)
+            except json.JSONDecodeError:
+                args = {"_raw": call.function.arguments}
+                result = json.dumps({"error": "Arguments were not valid JSON.",
+                                     "hint": "Call the tool again with a JSON object of arguments."})
+            tool_calls += [{"name": call.function.name, "args": args, "result": result}]
+
+            messages += [{"role": "tool", "tool_call_id": call.id, "content": result}]
+
+    return "Sorry, I hit my tool-call limit before finishing.", tool_calls
+
+
+# --- Session Store ---
+
+# session_id -> list of messages. In-memory, single process.
+sessions: dict[str, list] = {}
+
+# --- FastAPI App ---
+
+app = FastAPI()
+app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+    session_id: str
+    tool_calls: list[dict]
+    # Sights the answer recommends, for the map. Not a tool call, so kept out of tool_calls.
+    map_pins: list[dict] = []
+
+
+@app.get("/")
+def index():
+    return FileResponse(HERE / "static" / "index.html")
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest):
+    # Get or create the session
+    session_id = request.session_id or str(uuid.uuid4())
+    if session_id not in sessions:
+        today = dt.date.today().strftime("%A, %Y-%m-%d")
+        sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT.format(today=today)}]
+
+    # Append user's message to the context
+    sessions[session_id] += [{"role": "user", "content": request.message}]
+
+    attractions.use_session(session_id)
+    map_pins = []
+    try:
+        response, tool_calls = run_agent(sessions[session_id])
+        # Sights: search results are unpinned candidates; pin only the places the answer recommends.
+        if any(c["name"] == "find_attractions" for c in tool_calls):
+            map_pins = attractions.pins_from_answer(response or "")
+    except Exception as e:
+        # Auth, billing, a model that is not running: show it in the chat, not as a 500.
+        response, tool_calls = f"Model call failed: {type(e).__name__}: {str(e)[:300]}", []
+
+    return ChatResponse(response=response, session_id=session_id, tool_calls=tool_calls, map_pins=map_pins)
+
+
+@app.post("/clear")
+def clear(session_id: str | None = None):
+    sessions.pop(session_id, None)
+    attractions.forget_session(session_id)
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    # Cloud Run injects PORT and requires listening on all interfaces.
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
