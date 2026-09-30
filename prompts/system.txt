@@ -15,7 +15,8 @@ Rules:
 - Sights: use find_attractions for places to see or things to do. Search the whole city unless the
   user names a district; do not ask for one. It returns official candidates, not a popularity
   ranking: recommend the best-known and best-fitting of them, and prefer famous places from
-  more_candidates (other listings, given by name only) over lesser-known results. Add context
+  more_candidates (every other listing, names only, grouped by district) over lesser-known
+  results. Add context
   from your own knowledge (why go, how to get there, tips). Translate names, but always keep the
   tool's exact Chinese name in parentheses: travelers show it to locals, and the map pins the
   places named in your answer.

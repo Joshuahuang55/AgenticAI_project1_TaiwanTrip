@@ -1,6 +1,7 @@
 """find_attractions (member B): sights, temples, museums, and trails from the Tourism Administration via TDX."""
 
 import json
+import re
 
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
@@ -46,7 +47,9 @@ for _plural in ("temples", "museums", "trails", "mountains", "waterfalls", "lake
     KEYWORDS[_plural] = KEYWORDS[_plural[:-2] if _plural.endswith("hes") else _plural[:-1]]
 
 MAX_ROWS = 500  # TDX rejects $top above 500 (HTTP 400).
-RANK_POOL = 50  # TDX returns rows in ID order, so fetch a pool and rank it here.
+# TDX returns rows in ID order (Tainan's first 50 are all rural north), so fetch the whole city up to
+# the cap and let the model pick famous places from every district. Tainan has 545 listings.
+RANK_POOL = MAX_ROWS
 # AttractionName -> full row from recent searches, so a place picked from more_candidates can be
 # expanded (address, coordinates for a map pin) without another TDX call. In-process only.
 _seen: dict[str, dict] = {}
@@ -176,6 +179,13 @@ def _spread(rows: list[dict], limit: int) -> list[dict]:
     return (first + rest)[:limit]
 
 
+def _by_district(rows: list[dict]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault((r.get("PostalAddress") or {}).get("Town") or "?", []).append(r.get("AttractionName"))
+    return out
+
+
 def _dedupe(rows: list[dict]) -> list[dict]:
     seen, out = set(), []
     for r in rows:
@@ -233,6 +243,13 @@ def pins_from_answer(answer: str) -> dict | None:
             answer = answer.replace(form, "\0" * len(form))
             if all(r is not other for _, other in found):
                 found.append((at, r))
+    # Then shortened names in parentheses, e.g. (臺南孔子廟) for 孔廟文化園區「臺南孔子廟」.
+    # "(安平老街 / 延平老街)" is tried part by part.
+    for m in re.finditer(r"[(（]([^()（）]{3,40})[)）]", answer):
+        for part in re.split(r"\s*[/／、,，]\s*", m.group(1).strip()):
+            hits = [r for name, r in _seen.items() if len(part) >= 3 and part in name]
+            if len(hits) == 1 and all(hits[0] is not other for _, other in found):
+                found.append((m.start(), hits[0]))
     picked = [r for _, r in sorted(found, key=lambda x: x[0])]
     if not picked:
         return None
@@ -304,8 +321,8 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         "keyword": kw or None,
         "searched_as": searched_as if searched_as != kw else None,
         "results": [_summarize(r, hours, fees, pin=False) for r in rows],
-        # Names only: lets the model spot a famous place the ID-ordered picks missed, at no extra call.
-        "more_candidates": [r.get("AttractionName") for r in ranked if r not in rows],
+        # Names only, by district: lets the model spot famous places the ID-ordered picks missed.
+        "more_candidates": _by_district([r for r in ranked if r not in rows]),
         "note": "Names and descriptions are in Chinese: translate them and keep the Chinese name so the user can "
                 "show it to a taxi driver. open_time or ticket_info null means the source has no data: say "
                 "so and suggest checking the official site; never guess.",

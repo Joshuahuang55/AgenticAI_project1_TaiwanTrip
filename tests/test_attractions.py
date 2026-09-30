@@ -168,7 +168,7 @@ def test_spread_takes_one_per_series_or_district_first(fake_tdx):
     out = json.loads(attractions.find_attractions("Taipei", keyword="trail", limit=4))
     assert [r["name"] for r in out["results"]] == [
         "大屯山系_忠義山親山步道", "南港山系_象山親山步道", "碧湖步道", "大屯山系_中正山步道"]
-    assert out["more_candidates"] == ["大湖公園步道"]
+    assert out["more_candidates"] == {"內湖區": ["大湖公園步道"]}
 
 
 def test_names_expands_picks_from_recent_search_without_tdx(fake_tdx):
@@ -201,7 +201,7 @@ def test_palace_museum_is_not_a_temple(fake_tdx):
     shrine = dict(PORT, AttractionID="P2", AttractionName="行天宮", Description="關聖帝君")
     data[attractions.ATTRACTION_PATH] = [palace, shrine]
     out = json.loads(attractions.find_attractions("Taipei", keyword="temple"))
-    assert [r["name"] for r in out["results"]] == ["行天宮"] and out["more_candidates"] == []
+    assert [r["name"] for r in out["results"]] == ["行天宮"] and out["more_candidates"] == {}
 
 
 def test_pins_only_places_named_in_the_answer(fake_tdx, monkeypatch):
@@ -235,3 +235,17 @@ def test_answer_pins_ignore_names_inside_longer_names(monkeypatch):
     monkeypatch.setattr(attractions, "_seen", {r["AttractionName"]: r for r in (area, canal)})
     pins = attractions.pins_from_answer("Walk the canal trail (擎天崗系_坪頂古圳步道).")
     assert [r["name"] for r in json.loads(pins["result"])["results"]] == ["擎天崗系_坪頂古圳步道"]
+
+
+def test_answer_pins_match_shortened_name_in_parentheses(monkeypatch):
+    confucius = dict(PORT, AttractionID="C1", AttractionName="孔廟文化園區「臺南孔子廟」", PositionLat=22.99)
+    monkeypatch.setattr(attractions, "_seen", {confucius["AttractionName"]: confucius})
+    pins = attractions.pins_from_answer("Confucius Temple (臺南孔子廟) is a must.")
+    assert json.loads(pins["result"])["results"][0]["lat"] == 22.99
+
+
+def test_answer_pins_split_alternative_names(monkeypatch):
+    street = dict(PORT, AttractionID="S1", AttractionName="安平老街(延平老街)", PositionLat=23.0)
+    monkeypatch.setattr(attractions, "_seen", {street["AttractionName"]: street})
+    pins = attractions.pins_from_answer("Anping Old Street (安平老街 / 延平老街) is Taiwan's oldest street.")
+    assert [r["name"] for r in json.loads(pins["result"])["results"]] == ["安平老街(延平老街)"]
