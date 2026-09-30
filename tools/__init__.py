@@ -5,15 +5,16 @@ To add a tool, write a module with a function and a SCHEMA, then register it bel
 
 import json
 
-from tools import exchange, food, holidays, lodging, starter_weather, transport
+from tools import attractions, exchange, food, holidays, lodging, transport, weather
 
 _MODULES = [
     (lodging.legal_stay_check, lodging.SCHEMA),
     (food.find_local_food, food.SCHEMA),
+    (attractions.find_attractions, attractions.SCHEMA),
     (exchange.twd_exchange, exchange.SCHEMA),
     (transport.hsr_trip_planner, transport.SCHEMA),
     (holidays.crowd_risk_check, holidays.SCHEMA),
-    (starter_weather.get_weather, starter_weather.SCHEMA),
+    (weather.typhoon_backup_plan, weather.SCHEMA),
 ]
 
 # What the model sees: the "set notes" in the screenplay.
