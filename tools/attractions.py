@@ -1,0 +1,312 @@
+"""find_attractions (member B): sights, temples, museums, and trails from the Tourism Administration via TDX."""
+
+import json
+
+from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
+
+ATTRACTION_PATH = "tourism/service/odata/V2/Tourism/Attraction"
+SERVICE_TIME_PATH = "tourism/service/odata/V2/Tourism/Attraction/ServiceTime"
+FEE_PATH = "tourism/service/odata/V2/Tourism/AttractionFee"
+
+# Official AttractionClassEnum (Tourism Data Standard V2.1, section 14), in English for the model.
+CLASS_NAMES = {
+    1: "Culture", 2: "Ecology", 3: "Heritage site", 4: "Temple/religious site", 5: "Art",
+    6: "Shopping street/market", 7: "National park", 8: "National scenic area", 9: "Leisure farm",
+    10: "Hot spring", 11: "Natural scenery", 12: "Recreation", 13: "Sports/trail", 14: "Tourist factory",
+    15: "Metropolitan park", 16: "Forest recreation area", 17: "Plains forest park",
+    18: "National nature park", 19: "Park", 20: "Theme park", 21: "Indigenous culture",
+    22: "Hakka culture", 23: "Transport hub", 24: "Waterside (beach, lake, falls)",
+    25: "Museum/gallery", 26: "Zoo/aquarium", 27: "Entertainment venue",
+}
+# ServiceStatusEnum: 0 permanently closed, 3 temporarily closed.
+CLOSED_STATUS = {0, 3}
+
+# TDX data is in Chinese. Map what a foreign traveler types to words the listings use; a place
+# matches if its name or description contains any of them. Class codes are not used for matching:
+# they are inconsistent between data sources (e.g. New Taipei museums are not tagged 25).
+KEYWORDS = {
+    "temple": ("廟", "宮", "寺"), "shrine": ("廟", "宮", "祠"), "church": ("教堂",),
+    "museum": ("博物館", "美術館", "文物館", "紀念館"), "art": ("美術館", "藝術"), "gallery": ("美術館", "藝廊"),
+    "history": ("古蹟", "歷史"), "heritage": ("古蹟",), "historic site": ("古蹟",), "culture": ("文化",),
+    "hiking": ("步道", "登山"), "trail": ("步道",), "mountain": ("登山", "山區", "步道"),
+    "nature": ("自然", "生態"), "forest": ("森林",), "national park": ("國家公園",), "waterfall": ("瀑布",),
+    "lake": ("湖", "潭"), "beach": ("海灘", "沙灘", "海水浴場"), "hot spring": ("溫泉",), "old street": ("老街",),
+    "shopping": ("商圈", "老街"), "market": ("市場", "市集"), "park": ("公園",), "garden": ("花園", "庭園"),
+    "night view": ("夜景",), "view": ("觀景", "景觀"), "sunset": ("夕陽",), "farm": ("農場", "牧場"),
+    "zoo": ("動物園",), "aquarium": ("水族館", "海生館"), "theme park": ("樂園",), "amusement park": ("樂園",),
+    "factory": ("觀光工廠",), "aboriginal": ("原住民", "部落"), "indigenous": ("原住民", "部落"),
+    "hakka": ("客家",), "bike": ("自行車",), "cycling": ("自行車",), "harbor": ("港",), "port": ("港",),
+    "island": ("島",),
+}
+for _plural in ("temples", "museums", "trails", "mountains", "waterfalls", "lakes", "beaches", "hot springs",
+                "parks", "gardens", "farms", "markets"):
+    KEYWORDS[_plural] = KEYWORDS[_plural[:-2] if _plural.endswith("hes") else _plural[:-1]]
+
+MAX_ROWS = 500  # TDX rejects $top above 500 (HTTP 400).
+RANK_POOL = 50  # TDX returns rows in ID order, so fetch a pool and rank it here.
+# AttractionName -> full row from recent searches, so a place picked from more_candidates can be
+# expanded (address, coordinates for a map pin) without another TDX call. In-process only.
+_seen: dict[str, dict] = {}
+
+DAY_ABBR = {"Monday": "Mon", "Tuesday": "Tue", "Wednesday": "Wed", "Thursday": "Thu",
+            "Friday": "Fri", "Saturday": "Sat", "Sunday": "Sun"}
+WEEK = list(DAY_ABBR)
+SPECIAL_DAYS = {"PublicHolidays": "public holidays", "DayBeforeHolidays": "day before holidays",
+                "DayAfterHolidays": "day after holidays", "TyphoonDay": "typhoon days"}
+
+
+def _days_text(days: list[str]) -> str:
+    """['Monday', ..., 'Friday', 'PublicHolidays'] -> 'Mon-Fri, public holidays'; all seven -> 'Daily'."""
+    idx = sorted({WEEK.index(d) for d in days if d in DAY_ABBR})
+    special = [SPECIAL_DAYS[d] for d in days if d in SPECIAL_DAYS]
+    if len(idx) == 7:
+        return ", ".join(["Daily", *special])
+    runs, start = [], None
+    for i, d in enumerate(idx):
+        if start is None:
+            start = d
+        if i + 1 == len(idx) or idx[i + 1] != d + 1:
+            a, b = DAY_ABBR[WEEK[start]], DAY_ABBR[WEEK[d]]
+            runs.append(a if start == d else f"{a}-{b}")
+            start = None
+    return ", ".join(runs + special)
+
+
+def _open_time(periods: list[dict]) -> str | None:
+    parts = []
+    for p in periods:
+        start, end = (p.get("StartTime") or "")[:5], (p.get("EndTime") or "")[:5]
+        hours = f"{start}-{end}" if start and end else (p.get("Description") or p.get("Name") or "")
+        days = _days_text(p.get("ServiceDays") or [])
+        text = f"{days} {hours}".strip()
+        if text:
+            parts.append(text)
+    return "; ".join(parts) or None
+
+
+def _ticket_info(fees: list[dict]) -> str | None:
+    parts = []
+    has_paid = any((f.get("Price") or 0) > 0 for f in fees)
+    for f in fees:
+        name, price = (f.get("Name") or "").strip(), f.get("Price")
+        if price == 0 or (price is None and name == "免費"):
+            if name in ("", "免費"):
+                parts.append("free for eligible visitors" if has_paid else "Free")
+            else:
+                parts.append(f"{name} free")
+        elif price is not None:
+            parts.append(f"{name} NT${price}".strip())
+        elif name or f.get("Description"):
+            parts.append(name or f.get("Description"))
+    return "; ".join(dict.fromkeys(parts)) or None
+
+
+def _lookup(path: str, field: str) -> dict[str, list]:
+    """AttractionID -> ServiceTimes/Fees. Only a few sources publish these (~1% of attractions), so the
+    whole endpoint fits in one cached call. Missing data never fails the search."""
+    rows = tdx_get(path, {"$top": MAX_ROWS})
+    if isinstance(rows, dict):
+        return {}
+    return {r["AttractionID"]: r.get(field) or [] for r in rows if r.get("AttractionID")}
+
+
+def _summarize(r: dict, hours: dict, fees: dict, pin: bool = True) -> dict:
+    addr = r.get("PostalAddress") or {}
+    phones = [t["Tel"] for t in r.get("Telephones") or [] if t.get("Tel")]
+    desc = (r.get("Description") or "").strip()
+    aid = r.get("AttractionID")
+    out = {
+        "name": r.get("AttractionName"),
+        "categories": [CLASS_NAMES[c] for c in r.get("AttractionClasses") or [] if c in CLASS_NAMES],
+        "description": desc[:160] + ("…" if len(desc) > 160 else ""),
+        "address": f"{addr.get('City', '')}{addr.get('Town', '')}{addr.get('StreetAddress', '')}",
+        "open_time": _open_time(hours.get(aid, [])) or (r.get("ServiceTimeInfo") or "").strip() or None,
+        "ticket_info": _ticket_info(fees.get(aid, [])) or (r.get("FeeInfo") or "").strip() or None,
+        "phone": phones[0] if phones else None,
+    }
+    if pin:  # the frontend pins any result with lat/lon, so only the final picks carry them
+        out.update(lat=r.get("PositionLat"), lon=r.get("PositionLon"))
+    return out
+
+
+def _search_words(kw: str) -> tuple[str, ...]:
+    """'hiking' -> ('步道', '登山'); a phrase like 'mountain trails' merges its known words;
+    anything else (e.g. Chinese) is searched as typed."""
+    if not kw:
+        return ()
+    if kw.lower() in KEYWORDS:
+        return KEYWORDS[kw.lower()]
+    words = [w for part in kw.lower().split() for w in KEYWORDS.get(part, ())]
+    return tuple(dict.fromkeys(words)) or (kw,)
+
+
+def _rank(rows: list[dict], words: tuple[str, ...]) -> list[dict]:
+    """Best first: keyword in the name, then well-documented listings (photo, real description)."""
+    def score(r: dict) -> int:
+        name = r.get("AttractionName") or ""
+        return (2 * any(w in name for w in words) + bool(r.get("Images"))
+                + (len(r.get("Description") or "") >= 80))
+    return sorted(rows, key=score, reverse=True)  # stable: ties keep TDX order
+
+
+def _spread(rows: list[dict], limit: int) -> list[dict]:
+    """Take one place per group before seconds, so ten results are not all one trail network.
+    Group = the series prefix TDX puts in names ('大屯山系_中正山步道' -> '大屯山系'), else the district."""
+    def group(r: dict) -> str:
+        name = r.get("AttractionName") or ""
+        return name.split("_")[0] if "_" in name else (r.get("PostalAddress") or {}).get("Town", "")
+    seen, first, rest = set(), [], []
+    for r in rows:
+        (rest if group(r) in seen else first).append(r)
+        seen.add(group(r))
+    return (first + rest)[:limit]
+
+
+def _dedupe(rows: list[dict]) -> list[dict]:
+    seen, out = set(), []
+    for r in rows:
+        addr = r.get("PostalAddress") or {}
+        key = (r.get("AttractionName"), addr.get("Town"), addr.get("StreetAddress"))
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+def _details(county: str, names: list[str]) -> str:
+    """Full listings for places the model picked by name, from recent searches or one TDX call."""
+    names = [n.strip() for n in names if n and n.strip()][:10]
+    def recent(n: str) -> dict | None:
+        return next((r for key, r in _seen.items()
+                     if (r.get("PostalAddress") or {}).get("City") == county and n in key), None)
+    found = {n: recent(n) for n in names}
+    missing = [n for n, r in found.items() if r is None]
+    if missing:
+        match = " or ".join(f"contains(AttractionName,'{odata_quote(n)}')" for n in missing)
+        rows = tdx_get(ATTRACTION_PATH, {"$filter": f"PostalAddress/City eq '{county}' and ({match})",
+                                         "$top": len(missing) * 3})
+        if isinstance(rows, dict):
+            return json.dumps(rows, ensure_ascii=False)
+        for n in missing:
+            found[n] = next((r for r in rows if n in (r.get("AttractionName") or "")), None)
+    picked = []
+    for r in found.values():
+        if r and r not in picked:
+            picked.append(r)
+    hours = _lookup(SERVICE_TIME_PATH, "ServiceTimes")
+    fees = _lookup(FEE_PATH, "Fees")
+    return json.dumps({
+        "city": county,
+        "results": [_summarize(r, hours, fees) for r in picked],
+        "not_found": [n for n, r in found.items() if r is None],
+        "source": "Taiwan Tourism Administration via TDX",
+    }, ensure_ascii=False)
+
+
+def find_attractions(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
+                     names: list[str] | None = None) -> str:
+    place = resolve_city(city)
+    if place is None:
+        return json.dumps({
+            "error": f"Unknown city '{city}'.",
+            "hint": "Use a Taiwan city or county name.",
+            "valid_cities": city_choices(),
+        })
+    county, town = place
+    if names:
+        return _details(county, names)
+    town = district or town
+    limit = max(1, min(int(limit), 10))
+
+    kw = (keyword or "").strip()
+    words = _search_words(kw)
+    # Filter on the TDX side: a big city (New Taipei) has more than the 500-row cap.
+    filters = [f"PostalAddress/City eq '{county}'"]
+    if town:
+        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
+    if words:
+        match = " or ".join(
+            f"contains(AttractionName,'{odata_quote(w)}') or contains(Description,'{odata_quote(w)}')"
+            for w in words
+        )
+        filters.append(f"({match})")
+    rows = tdx_get(ATTRACTION_PATH, {"$filter": " and ".join(filters), "$top": RANK_POOL})
+    if isinstance(rows, dict):
+        return json.dumps(rows, ensure_ascii=False)
+
+    rows = [r for r in rows if r.get("ServiceStatus") not in CLOSED_STATUS]
+    if len(_seen) > 5000:
+        _seen.clear()
+    _seen.update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
+    ranked = _dedupe(_rank(rows, words))
+    rows = _spread(ranked, limit)
+    if not rows:
+        hint = "No listed attractions match. "
+        if kw and kw.isascii() and words == (kw,):
+            hint += (f"Listings are in Chinese; retry with a Traditional Chinese keyword for '{kw}' "
+                     "(e.g. 博物館, 廟, 步道) or a broader one.")
+        elif district:
+            hint += "Retry without `district` to search the whole city."
+        else:
+            hint += "Retry with a broader keyword, without a keyword, or in a nearby city."
+        return json.dumps({"city": county, "keyword": kw, "results": [], "hint": hint}, ensure_ascii=False)
+
+    hours = _lookup(SERVICE_TIME_PATH, "ServiceTimes")
+    fees = _lookup(FEE_PATH, "Fees")
+    searched_as = ", ".join(words)
+    return json.dumps({
+        "city": county,
+        "keyword": kw or None,
+        "searched_as": searched_as if searched_as != kw else None,
+        "results": [_summarize(r, hours, fees, pin=False) for r in rows],
+        # Names only: lets the model spot a famous place the ID-ordered picks missed, at no extra call.
+        "more_candidates": [r.get("AttractionName") for r in ranked if r not in rows],
+        "note": "Candidates only, without map pins: call again with `names` set to your picks. Names "
+                "and descriptions are in Chinese: translate them and keep the Chinese name so the user can "
+                "show it to a taxi driver. open_time or ticket_info null means the source has no data: say "
+                "so and suggest checking the official site; never guess.",
+        "source": "Taiwan Tourism Administration via TDX",
+    }, ensure_ascii=False)
+
+
+SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "find_attractions",
+        "description": (
+            "Find sights to visit in a Taiwan city from the Tourism Administration's listings: temples, "
+            "museums, hiking trails, old streets, parks, beaches, and more. Use when the user asks what to "
+            "see or do. Returns up to `limit` varied candidates (not ranked by popularity) with name "
+            "(Chinese), categories, short description, address, opening hours, ticket prices, phone, and "
+            "coordinates, plus `more_candidates`: names of other matching listings. Pick the best-known "
+            "and best-fitting ones for the user."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "Taiwan city/county in English, e.g. 'Tainan', 'Taipei', 'Hualien'. "
+                                   "Famous spots also work: 'Jiufen', 'Kenting'.",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "Optional type of place, e.g. 'temple', 'museum', 'hiking', 'old street', "
+                                   "'hot spring', or a Traditional Chinese term like '老街'. Omit for any.",
+                },
+                "district": {
+                    "type": "string",
+                    "description": "Only if the user names a district: the district in Traditional Chinese, "
+                                   "e.g. '中西區', '大安區'. Otherwise omit.",
+                },
+                "limit": {"type": "integer", "description": "How many candidates (1-10, default 10)."},
+                "names": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Only after a search: exact Chinese names you picked from results or "
+                                   "more_candidates, to get their address, hours, and map pin. Keep `city`.",
+                },
+            },
+            "required": ["city"],
+        },
+    },
+}
