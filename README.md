@@ -2,7 +2,7 @@
 
 A chat agent that acts like a local friend for foreigners traveling in Taiwan. It looks things
 up in official Taiwanese open data instead of guessing: whether a B&B is legally registered,
-where locals eat, and how far your budget goes in TWD. Every tool call is shown in the chat,
+where locals eat, what to see, whether a typhoon is coming, and how far your budget goes in TWD. Every tool call is shown in the chat,
 and a trip board (map, stay check, budget) is drawn from the tool results.
 
 ## Sample queries
@@ -16,6 +16,11 @@ and a trip board (map, stay check, budget) is drawn from the tool results.
 4. `I'm taking the train from Taipei to Tainan on Oct 8, 2026. Will the holiday make travel busy?`
    → `crowd_risk_check` highlights the day before the break as the stronger network-wide travel signal; `hsr_trip_planner` lists trains. The risk is not a live seat count.
 
+5. `Recommend me mountain trails in Taipei.` then `Which one is best for sunset? Are there any temples near it?`
+   → `find_attractions` for trails, then again with a district for nearby temples. Only the places named in the answer are pinned.
+6. `I'm going to Hualien this Saturday. Any typhoon or rain I should worry about?`
+   → `typhoon_backup_plan` checks the CWA forecast and typhoon warnings; on a bad day it adds indoor backups on the map.
+
 Follow-up to test memory: after query 2, ask `Is the second one you listed registered? Double check it.`
 
 ## Tools
@@ -27,14 +32,15 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
-| `get_weather` | Starter placeholder, current weather | Open-Meteo |
+| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names | Tourism Administration via TDX |
+| `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
 
 ## Run locally
 
 1. A GCP project with billing and the Vertex AI API enabled, then `gcloud auth application-default login`.
-2. A free [TDX](https://tdx.transportdata.tw/) account. Copy `.env.example` to `.env` and fill in the client ID and secret.
+2. A free [TDX](https://tdx.transportdata.tw/) account and a free [CWA open data](https://opendata.cwa.gov.tw/) API key (授權碼). Copy `.env.example` to `.env` and fill in the TDX client ID and secret and `CWA_API_KEY`.
 3. `uv run app.py`, then open http://localhost:8000
 4. Tests (network mocked): `uv run pytest`
 
@@ -44,13 +50,13 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 
 ## Deploy
 
-Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` as
-environment variables on the service. Keep max instances at 1: sessions are stored in memory.
+Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID`, `TDX_CLIENT_SECRET`, and
+`CWA_API_KEY` as environment variables on the service. Keep max instances at 1: sessions are stored in memory.
 
 ## Layout
 
 ```
-app.py              routes, session store, agent loop
+app.py              routes, session store, agent loop, sight pins
 prompts/system.txt  system prompt (with {today} filled in at session start)
 tools/__init__.py   tool registry (TOOLS + run_tool)
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
@@ -59,6 +65,8 @@ tools/food.py       find_local_food
 tools/exchange.py   twd_exchange
 tools/transport.py  hsr_trip_planner (THSR and TRA)
 tools/holidays.py   crowd_risk_check (official calendar, estimated travel pressure)
+tools/attractions.py find_attractions (and pins for the places an answer recommends)
+tools/weather.py    typhoon_backup_plan (CWA forecast and typhoon warnings)
 static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
 tests/              tool tests
 ```
