@@ -7,7 +7,7 @@ import pytest
 from tools import attractions
 
 TEMPLE = {
-    "AttractionID": "A1", "AttractionName": "南鯤鯓代天府", "Description": "全臺規模最大的王爺信仰中心",
+    "AttractionID": "A1", "AttractionName": "南鯤鯓代天府", "Description": "全臺規模最大的王爺信仰中心廟宇",
     "AttractionClasses": [1, 3, 4], "ServiceStatus": 1, "ServiceTimeInfo": "", "FeeInfo": "",
     "PostalAddress": {"City": "臺南市", "Town": "北門區", "StreetAddress": "鯤江976號"},
     "Telephones": [{"Tel": "(06)7863711"}], "PositionLat": 23.28, "PositionLon": 120.14,
@@ -193,3 +193,45 @@ def test_names_falls_back_to_one_tdx_query(fake_tdx, monkeypatch):
     assert [r["name"] for r in out["results"]] == ["南鯤鯓代天府"]
     assert out["not_found"] == ["不存在的地方"]
     assert "contains(AttractionName,'南鯤鯓代天府')" in calls[0][1]["$filter"]
+
+
+def test_palace_museum_is_not_a_temple(fake_tdx):
+    _, data = fake_tdx
+    palace = dict(PORT, AttractionID="P1", AttractionName="國立故宮博物院", Description="故宮收藏")
+    shrine = dict(PORT, AttractionID="P2", AttractionName="行天宮", Description="關聖帝君")
+    data[attractions.ATTRACTION_PATH] = [palace, shrine]
+    out = json.loads(attractions.find_attractions("Taipei", keyword="temple"))
+    assert [r["name"] for r in out["results"]] == ["行天宮"] and out["more_candidates"] == []
+
+
+def test_pins_only_places_named_in_the_answer(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    monkeypatch.setattr(attractions, "_seen", {})
+    xiangshan = dict(PORT, AttractionID="X1", AttractionName="南港山系_象山親山步道", PositionLat=25.03)
+    data[attractions.ATTRACTION_PATH] = [xiangshan, TEMPLE, SHRINE]
+    out = json.loads(attractions.find_attractions("Tainan"))
+    assert all("lat" not in r for r in out["results"])  # candidates are never pinned
+    answer = "Go to Elephant Mountain (象山親山步道) and 南鯤鯓代天府."
+    pins = attractions.pins_from_answer(answer)
+    names = [r["name"] for r in json.loads(pins["result"])["results"]]
+    assert names == ["南港山系_象山親山步道", "南鯤鯓代天府"]
+    assert json.loads(pins["result"])["results"][0]["lat"] == 25.03
+    assert attractions.pins_from_answer("No Chinese names here.") is None
+
+
+def test_name_matches_come_before_description_mentions(fake_tdx):
+    _, data = fake_tdx
+    bike = dict(PORT, AttractionID="K1", AttractionName="八里左岸自行車道", Description="可遠眺關渡宮")
+    temple = dict(PORT, AttractionID="K2", AttractionName="關渡宮", Description="媽祖廟",
+                  PostalAddress={"City": "臺北市", "Town": "北投區", "StreetAddress": "知行路360號"})
+    data[attractions.ATTRACTION_PATH] = [bike, temple]
+    out = json.loads(attractions.find_attractions("Taipei", keyword="temple"))
+    assert [r["name"] for r in out["results"]] == ["關渡宮", "八里左岸自行車道"]
+
+
+def test_answer_pins_ignore_names_inside_longer_names(monkeypatch):
+    area = dict(PORT, AttractionID="Q1", AttractionName="擎天崗", PositionLat=25.16)
+    canal = dict(PORT, AttractionID="Q2", AttractionName="擎天崗系_坪頂古圳步道", PositionLat=25.13)
+    monkeypatch.setattr(attractions, "_seen", {r["AttractionName"]: r for r in (area, canal)})
+    pins = attractions.pins_from_answer("Walk the canal trail (擎天崗系_坪頂古圳步道).")
+    assert [r["name"] for r in json.loads(pins["result"])["results"]] == ["擎天崗系_坪頂古圳步道"]

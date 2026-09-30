@@ -27,6 +27,7 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
 load_dotenv()
 
 from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
+from tools.attractions import pins_from_answer  # noqa: E402
 
 # --- Config ---
 
@@ -110,6 +111,9 @@ def chat(request: ChatRequest):
 
     try:
         response, tool_calls = run_agent(sessions[session_id])
+        # Sights: search results are unpinned candidates; pin only the places the answer recommends.
+        if any(c["name"] == "find_attractions" for c in tool_calls) and (pins := pins_from_answer(response or "")):
+            tool_calls += [pins]
     except Exception as e:
         # Auth, billing, a model that is not running: show it in the chat, not as a 500.
         response, tool_calls = f"Model call failed: {type(e).__name__}: {str(e)[:300]}", []

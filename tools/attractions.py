@@ -38,6 +38,9 @@ KEYWORDS = {
     "hakka": ("客家",), "bike": ("自行車",), "cycling": ("自行車",), "harbor": ("港",), "port": ("港",),
     "island": ("島",),
 }
+# Longer words that contain a search word but mean something else: 故宮 (the Palace Museum) is not a temple.
+FALSE_MATCHES = {"宮": ("故宮",)}
+
 for _plural in ("temples", "museums", "trails", "mountains", "waterfalls", "lakes", "beaches", "hot springs",
                 "parks", "gardens", "farms", "markets"):
     KEYWORDS[_plural] = KEYWORDS[_plural[:-2] if _plural.endswith("hes") else _plural[:-1]]
@@ -140,11 +143,22 @@ def _search_words(kw: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(words)) or (kw,)
 
 
+def _has(text: str, word: str) -> bool:
+    for longer in FALSE_MATCHES.get(word, ()):
+        text = text.replace(longer, "")
+    return word in text
+
+
 def _rank(rows: list[dict], words: tuple[str, ...]) -> list[dict]:
-    """Best first: keyword in the name, then well-documented listings (photo, real description)."""
+    """Drop rows that only matched a false word (故宮 for 宮), then best first: keyword in the name,
+    then well-documented listings (photo, real description)."""
+    def text(r: dict) -> str:
+        return f"{r.get('AttractionName') or ''} {r.get('Description') or ''}"
+    if words:
+        rows = [r for r in rows if any(_has(text(r), w) for w in words)]
     def score(r: dict) -> int:
         name = r.get("AttractionName") or ""
-        return (2 * any(w in name for w in words) + bool(r.get("Images"))
+        return (2 * any(_has(name, w) for w in words) + bool(r.get("Images"))
                 + (len(r.get("Description") or "") >= 80))
     return sorted(rows, key=score, reverse=True)  # stable: ties keep TDX order
 
@@ -203,6 +217,35 @@ def _details(county: str, names: list[str]) -> str:
     }, ensure_ascii=False)
 
 
+def pins_from_answer(answer: str) -> dict | None:
+    """Map pins for the places the final answer actually recommends: listings from recent searches
+    whose Chinese name (or the part after the series prefix, e.g. 象山親山步道) appears in the text.
+    Needs no TDX call and no extra model step, so the map shows picks, not every candidate."""
+    # Longest names first, and each match is blanked out, so 擎天崗 does not also match inside
+    # 擎天崗系_坪頂古圳步道. Results keep the order the answer mentions them.
+    forms = sorted(((form, r) for name, r in _seen.items()
+                    for form in {name, name.rsplit("_", 1)[-1]} if len(form) >= 3),
+                   key=lambda fr: len(fr[0]), reverse=True)
+    found = []
+    for form, r in forms:
+        at = answer.find(form)
+        if at >= 0:
+            answer = answer.replace(form, "\0" * len(form))
+            if all(r is not other for _, other in found):
+                found.append((at, r))
+    picked = [r for _, r in sorted(found, key=lambda x: x[0])]
+    if not picked:
+        return None
+    return {
+        "name": "find_attractions",
+        "args": {"city": (picked[0].get("PostalAddress") or {}).get("City"), "keyword": "recommended"},
+        "result": json.dumps({
+            "results": [_summarize(r, {}, {}) for r in picked],
+            "source": "Taiwan Tourism Administration via TDX",
+        }, ensure_ascii=False),
+    }
+
+
 def find_attractions(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
                      names: list[str] | None = None) -> str:
     place = resolve_city(city)
@@ -239,7 +282,9 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         _seen.clear()
     _seen.update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
     ranked = _dedupe(_rank(rows, words))
-    rows = _spread(ranked, limit)
+    named = [r for r in ranked if not words or any(_has(r.get("AttractionName") or "", w) for w in words)]
+    rows = _spread(named, limit)
+    rows += _spread([r for r in ranked if r not in named], limit - len(rows))
     if not rows:
         hint = "No listed attractions match. "
         if kw and kw.isascii() and words == (kw,):
@@ -261,8 +306,7 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         "results": [_summarize(r, hours, fees, pin=False) for r in rows],
         # Names only: lets the model spot a famous place the ID-ordered picks missed, at no extra call.
         "more_candidates": [r.get("AttractionName") for r in ranked if r not in rows],
-        "note": "Candidates only, without map pins: call again with `names` set to your picks. Names "
-                "and descriptions are in Chinese: translate them and keep the Chinese name so the user can "
+        "note": "Names and descriptions are in Chinese: translate them and keep the Chinese name so the user can "
                 "show it to a taxi driver. open_time or ticket_info null means the source has no data: say "
                 "so and suggest checking the official site; never guess.",
         "source": "Taiwan Tourism Administration via TDX",
@@ -302,8 +346,8 @@ SCHEMA = {
                 "limit": {"type": "integer", "description": "How many candidates (1-10, default 10)."},
                 "names": {
                     "type": "array", "items": {"type": "string"},
-                    "description": "Only after a search: exact Chinese names you picked from results or "
-                                   "more_candidates, to get their address, hours, and map pin. Keep `city`.",
+                    "description": "Only after a search: Chinese names from results or more_candidates "
+                                   "that you need details for (address, hours, fees). Keep `city`.",
                 },
             },
             "required": ["city"],
