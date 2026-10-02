@@ -231,6 +231,9 @@ def _details(county: str, names: list[str]) -> str:
                                          "$top": len(missing) * 3})
         if isinstance(rows, dict):
             return json.dumps(rows, ensure_ascii=False)
+        rows = [r for r in rows if r.get("ServiceStatus") not in CLOSED_STATUS]
+        # Remember them like search results, so the answer's picks get map pins.
+        _seen().update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
         for n in missing:
             found[n] = next((r for r in rows if n in (r.get("AttractionName") or "")), None)
     picked = []

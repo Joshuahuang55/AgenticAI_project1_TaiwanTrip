@@ -201,6 +201,20 @@ def test_names_falls_back_to_one_tdx_query(fake_tdx, monkeypatch):
     assert "contains(AttractionName,'南鯤鯓代天府')" in calls[0][1]["$filter"]
 
 
+def test_names_lookup_without_a_search_still_pins_the_picks(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [TEMPLE]
+    attractions.find_attractions("Tainan", names=["南鯤鯓代天府"])
+    assert [r["name"] for r in attractions.pins_from_answer("Visit 南鯤鯓代天府.")] == ["南鯤鯓代天府"]
+
+
+def test_names_lookup_skips_closed_places(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [dict(TEMPLE, ServiceStatus=0)]
+    out = json.loads(attractions.find_attractions("Tainan", names=["南鯤鯓代天府"]))
+    assert out["results"] == [] and out["not_found"] == ["南鯤鯓代天府"]
+
+
 def test_palace_museum_is_not_a_temple(fake_tdx):
     _, data = fake_tdx
     palace = dict(PORT, AttractionID="P1", AttractionName="國立故宮博物院", Description="故宮收藏")
