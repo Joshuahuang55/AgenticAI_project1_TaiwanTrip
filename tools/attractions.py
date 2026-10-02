@@ -22,6 +22,7 @@ CLASS_NAMES = {
 }
 # ServiceStatusEnum: 0 permanently closed, 3 temporarily closed.
 CLOSED_STATUS = {0, 3}
+CLOSED_TEXT = {0: "permanently closed", 3: "temporarily closed"}
 
 # TDX data is in Chinese. Map what a foreign traveler types to words the listings use; a place
 # matches if its name or description contains any of them. Class codes are not used for matching:
@@ -217,37 +218,103 @@ def _dedupe(rows: list[dict]) -> list[dict]:
     return out
 
 
+# Variant characters travelers and listings mix: 台/臺, 赤嵌樓/赤崁樓, 赤柯山/赤科山.
+NAME_VARIANTS = str.maketrans({"台": "臺", "崁": "嵌", "柯": "科"})
+MAX_NAME_MATCHES = 3
+
+
+def _clean(name: str) -> str:
+    return re.sub(r"[\s\-‧・·_()（）「」『』]", "", name or "").translate(NAME_VARIANTS)
+
+
+def _in_order(short: str, long: str) -> bool:
+    """Every character of `short` appears in `long`, in order: 士林夜市 fits %士%林%夜%市% in 士林觀光夜市."""
+    chars = iter(long)
+    return all(c in chars for c in short)
+
+
+def _name_matches(name: str, rows: list[dict]) -> list[dict]:
+    """Listings a picked name refers to: the exact name if listed, else every in-order match, closest
+    length first. 臺北市孔廟 also finds 臺北孔廟 (the listing's characters in the name's order)."""
+    q = _clean(name)
+    exact = [r for r in rows if _clean(r.get("AttractionName")) == q]
+    if exact:
+        return exact[:1]
+    out, seen = [], set()
+    for r in rows:
+        c = _clean(r.get("AttractionName"))
+        if c and c not in seen and (_in_order(q, c) or (len(c) >= 3 and _in_order(c, q))):
+            seen.add(c)
+            out.append(r)
+    return sorted(out, key=lambda r: abs(len(_clean(r["AttractionName"])) - len(q)))
+
+
 def _details(county: str, names: list[str]) -> str:
-    """Full listings for places the model picked by name, from recent searches or one TDX call."""
-    names = [n.strip() for n in names if n and n.strip()][:10]
-    def recent(n: str) -> dict | None:
-        return next((r for key, r in _seen().items()
-                     if (r.get("PostalAddress") or {}).get("City") == county and n in key), None)
-    found = {n: recent(n) for n in names}
-    missing = [n for n, r in found.items() if r is None]
-    if missing:
-        match = " or ".join(f"contains(AttractionName,'{odata_quote(n)}')" for n in missing)
-        rows = tdx_get(ATTRACTION_PATH, {"$filter": f"PostalAddress/City eq '{county}' and ({match})",
-                                         "$top": len(missing) * 3})
+    """Full listings for places the model picked by name, matched against the city's listings.
+
+    Names need not be exact: 士林夜市 finds 士林觀光夜市. When a name fits several listings, all of them
+    come back under possible_matches and the model picks the one the user means."""
+    names = list(dict.fromkeys(n.strip() for n in names if n and n.strip()))
+    names, not_checked = names[:10], names[10:]
+    recent = [r for r in _seen().values() if (r.get("PostalAddress") or {}).get("City") == county]
+    found = {n: _name_matches(n, recent) for n in names}  # usually picks from the last search: no TDX call
+    closed_rows = []
+    # Then the whole city (the query a keyword-less search makes, so the two share the cache), then a
+    # direct query by name, since a city can list more than the 500 rows one query returns.
+    for params in ({"$filter": f"PostalAddress/City eq '{county}'", "$top": RANK_POOL}, None):
+        missing = [n for n, hits in found.items() if not hits]
+        if not missing:
+            break
+        if params is None:
+            match = " or ".join(f"contains(AttractionName,'{odata_quote(n)}')" for n in missing)
+            params = {"$filter": f"PostalAddress/City eq '{county}' and ({match})", "$top": len(missing) * 3}
+        rows = tdx_get(ATTRACTION_PATH, params)
         if isinstance(rows, dict):
             return json.dumps(rows, ensure_ascii=False)
+        closed_rows += [r for r in rows if r.get("ServiceStatus") in CLOSED_STATUS]
         rows = [r for r in rows if r.get("ServiceStatus") not in CLOSED_STATUS]
-        # Remember them like search results, so the answer's picks get map pins.
-        _seen().update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
         for n in missing:
-            found[n] = next((r for r in rows if n in (r.get("AttractionName") or "")), None)
+            found[n] = _name_matches(n, rows)
+    # A name that only matches closed listings is reported as closed, not as missing.
+    closed = {n: [f"{r['AttractionName']} ({CLOSED_TEXT[r['ServiceStatus']]})"
+                  for r in _name_matches(n, closed_rows)[:MAX_NAME_MATCHES]]
+              for n, hits in found.items() if not hits}
+    closed = {n: listed for n, listed in closed.items() if listed}
+    too_many = {n: len(hits) for n, hits in found.items() if len(hits) > MAX_NAME_MATCHES}
+    found = {n: hits[:MAX_NAME_MATCHES] for n, hits in found.items()}
     picked = []
-    for r in found.values():
-        if r and r not in picked:
-            picked.append(r)
+    for hits in found.values():
+        picked += [r for r in hits if r not in picked]
+    # Remember them like search results, so the answer's picks get map pins.
+    _seen().update({r["AttractionName"]: r for r in picked if r.get("AttractionName")})
     hours = _lookup(SERVICE_TIME_PATH, "ServiceTimes")
     fees = _lookup(FEE_PATH, "Fees")
-    return json.dumps({
+    possible = {n: [r["AttractionName"] for r in hits] for n, hits in found.items()
+                if hits and [r["AttractionName"] for r in hits] != [n]}
+    out = {
         "city": county,
         "results": [_summarize(r, hours, fees) for r in picked],
-        "not_found": [n for n, r in found.items() if r is None],
+        "not_found": [n for n, hits in found.items() if not hits and n not in closed],
         "source": "Taiwan Tourism Administration via TDX",
-    }, ensure_ascii=False)
+    }
+    hints = []
+    if closed:
+        out["closed"] = closed
+        hints.append("Places in closed are closed in the official listing: tell the user and do not recommend them.")
+    if possible:
+        out["possible_matches"] = possible
+        hints.append("possible_matches maps your names to official listings with different names. Use the "
+                     "official name, and where a name has several, recommend only the one the user means.")
+    if too_many:
+        out["too_many_matches"] = too_many
+        hints.append(f"Names in too_many_matches fit more listings than the {MAX_NAME_MATCHES} shown: call again "
+                     "with a more specific name (e.g. the full temple name) if the one you mean is missing.")
+    if not_checked:
+        out["not_checked"] = not_checked
+        hints.append("Only 10 names are checked per call: call again with the names in not_checked.")
+    if hints:
+        out["hint"] = " ".join(hints)
+    return json.dumps(out, ensure_ascii=False)
 
 
 def pins_from_answer(answer: str) -> list[dict]:

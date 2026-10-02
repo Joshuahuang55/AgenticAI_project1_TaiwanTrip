@@ -198,7 +198,71 @@ def test_names_falls_back_to_one_tdx_query(fake_tdx, monkeypatch):
     out = json.loads(attractions.find_attractions("Tainan", names=["南鯤鯓代天府", "不存在的地方"]))
     assert [r["name"] for r in out["results"]] == ["南鯤鯓代天府"]
     assert out["not_found"] == ["不存在的地方"]
-    assert "contains(AttractionName,'南鯤鯓代天府')" in calls[0][1]["$filter"]
+    assert calls[0][1]["$filter"] == "PostalAddress/City eq '臺南市'"  # the whole city first
+    assert "contains(AttractionName,'不存在的地方')" in calls[1][1]["$filter"]  # then only the misses
+    assert "南鯤鯓代天府" not in calls[1][1]["$filter"]
+
+
+NIGHT_MARKET = dict(PORT, AttractionID="T1", AttractionName="士林觀光夜市",
+                    PostalAddress={"City": "臺北市", "Town": "士林區", "StreetAddress": "基河路101號"})
+LONGSHAN = dict(PORT, AttractionID="T2", AttractionName="艋舺龍山寺",
+                PostalAddress={"City": "臺北市", "Town": "萬華區", "StreetAddress": "廣州街211號"})
+LONGSHAN_MALL = dict(LONGSHAN, AttractionID="T3", AttractionName="龍山寺地下街")
+CONFUCIUS = dict(PORT, AttractionID="T4", AttractionName="臺北孔廟",
+                 PostalAddress={"City": "臺北市", "Town": "大同區", "StreetAddress": "大龍街275號"})
+
+
+@pytest.mark.parametrize("asked, official", [
+    ("士林夜市", "士林觀光夜市"),  # extra characters in the listing
+    ("台北市孔廟", "臺北孔廟"),    # 台/臺, and an extra character in the name
+])
+def test_names_match_listings_with_different_wording(fake_tdx, asked, official):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [NIGHT_MARKET, CONFUCIUS]
+    out = json.loads(attractions.find_attractions("Taipei", names=[asked]))
+    assert [r["name"] for r in out["results"]] == [official]
+    assert out["possible_matches"] == {asked: [official]} and out["not_found"] == []
+
+
+def test_names_with_several_listings_return_all_for_the_model_to_pick(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [LONGSHAN_MALL, LONGSHAN]
+    out = json.loads(attractions.find_attractions("Taipei", names=["龍山寺"]))
+    assert sorted(out["possible_matches"]["龍山寺"]) == ["艋舺龍山寺", "龍山寺地下街"]
+    assert "the one the user means" in out["hint"]
+
+
+def test_generic_names_say_how_many_listings_match(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [dict(TEMPLE, AttractionID=f"M{i}", AttractionName=f"第{i}天后宮") for i in range(5)]
+    out = json.loads(attractions.find_attractions("Tainan", names=["天后宮"]))
+    assert len(out["possible_matches"]["天后宮"]) == attractions.MAX_NAME_MATCHES
+    assert out["too_many_matches"] == {"天后宮": 5} and "more specific name" in out["hint"]
+
+
+def test_names_past_ten_are_reported_not_dropped(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [TEMPLE]
+    names = [f"地方{i}" for i in range(12)]
+    out = json.loads(attractions.find_attractions("Tainan", names=names))
+    assert out["not_found"] == names[:10] and out["not_checked"] == names[10:]
+    assert "call again with the names in not_checked" in out["hint"]
+
+
+def test_names_of_closed_places_are_reported_as_closed(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [dict(TEMPLE, AttractionName="太魯閣國家公園", ServiceStatus=3)]
+    out = json.loads(attractions.find_attractions("Hualien", names=["太魯閣國家公園"]))
+    assert out["results"] == [] and out["not_found"] == []
+    assert out["closed"] == {"太魯閣國家公園": ["太魯閣國家公園 (temporarily closed)"]}
+    assert "do not recommend them" in out["hint"]
+
+
+def test_exact_name_wins_over_partial_matches(fake_tdx):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [LONGSHAN_MALL, LONGSHAN]
+    out = json.loads(attractions.find_attractions("Taipei", names=["艋舺龍山寺"]))
+    assert [r["name"] for r in out["results"]] == ["艋舺龍山寺"] and "possible_matches" not in out
 
 
 def test_names_lookup_without_a_search_still_pins_the_picks(fake_tdx):
@@ -212,7 +276,7 @@ def test_names_lookup_skips_closed_places(fake_tdx):
     _, data = fake_tdx
     data[attractions.ATTRACTION_PATH] = [dict(TEMPLE, ServiceStatus=0)]
     out = json.loads(attractions.find_attractions("Tainan", names=["南鯤鯓代天府"]))
-    assert out["results"] == [] and out["not_found"] == ["南鯤鯓代天府"]
+    assert out["results"] == [] and out["closed"] == {"南鯤鯓代天府": ["南鯤鯓代天府 (permanently closed)"]}
 
 
 def test_palace_museum_is_not_a_temple(fake_tdx):
