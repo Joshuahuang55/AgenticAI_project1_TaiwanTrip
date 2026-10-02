@@ -28,14 +28,16 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 | Tool | What it does | Data source |
 |---|---|---|
 | `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
-| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets | Tourism Administration via TDX, plus local night-market schedules |
+| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
-| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names | Tourism Administration via TDX |
+| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names. Name lookups tolerate different wording (士林夜市 finds 士林觀光夜市) and report closed places | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback) |
 | `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
+
+Attractions and restaurants come from the Tourism Administration's daily open-data files, downloaded in the background at startup and refreshed daily ([tools/tourism_data.py](tools/tourism_data.py)). They hold every listing, with no TDX quota and no 500-row cap per query; until they load, or if the download fails, the tools query TDX. Hotels stay on TDX: their file is too large for a 512 MiB instance. Data is used under the [Open Government Data License, version 1.0](https://data.gov.tw/license).
 
 ## Guardrails
 
@@ -77,6 +79,7 @@ guardrails.py       input, output, and tool guardrails
 prompts/system.txt  system prompt (with {today} filled in on each turn)
 tools/__init__.py   tool registry (TOOLS + run_tool)
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
+tools/tourism_data.py daily open-data files for attractions and restaurants, searched in memory
 tools/lodging.py    legal_stay_check
 tools/food.py       find_local_food
 tools/exchange.py   twd_exchange

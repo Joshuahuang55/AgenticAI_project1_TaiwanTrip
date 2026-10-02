@@ -4,9 +4,11 @@ import json
 import re
 from contextvars import ContextVar
 
+from tools import tourism_data
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
 ATTRACTION_PATH = "tourism/service/odata/V2/Tourism/Attraction"
+TDX_SOURCE = "Taiwan Tourism Administration via TDX"
 SERVICE_TIME_PATH = "tourism/service/odata/V2/Tourism/Attraction/ServiceTime"
 FEE_PATH = "tourism/service/odata/V2/Tourism/AttractionFee"
 
@@ -131,7 +133,9 @@ def _ticket_info(fees: list[dict]) -> str | None:
 def _lookup(path: str, field: str) -> dict[str, list]:
     """AttractionID -> ServiceTimes/Fees. Only a few sources publish these (~1% of attractions), so the
     whole endpoint fits in one cached call. Missing data never fails the search."""
-    rows = tdx_get(path, {"$top": MAX_ROWS})
+    rows = tourism_data.extra("attractions", "hours" if path == SERVICE_TIME_PATH else "fees")
+    if rows is None:
+        rows = tdx_get(path, {"$top": MAX_ROWS})
     if isinstance(rows, dict):
         return {}
     return {r["AttractionID"]: r.get(field) or [] for r in rows if r.get("AttractionID")}
@@ -259,16 +263,20 @@ def _details(county: str, names: list[str]) -> str:
     recent = [r for r in _seen().values() if (r.get("PostalAddress") or {}).get("City") == county]
     found = {n: _name_matches(n, recent) for n in names}  # usually picks from the last search: no TDX call
     closed_rows = []
-    # Then the whole city (the query a keyword-less search makes, so the two share the cache), then a
-    # direct query by name, since a city can list more than the 500 rows one query returns.
-    for params in ({"$filter": f"PostalAddress/City eq '{county}'", "$top": RANK_POOL}, None):
+    # Then the whole city: from the official file when loaded (every listing), else from TDX, whose
+    # whole-city query a keyword-less search shares, then a direct query by name, since a city can
+    # list more than the 500 rows one TDX query returns.
+    city_rows = tourism_data.listings("attractions", county)
+    passes = [None] if city_rows is not None else [
+        {"$filter": f"PostalAddress/City eq '{county}'", "$top": RANK_POOL}, "by_name"]
+    for params in passes:
         missing = [n for n, hits in found.items() if not hits]
         if not missing:
             break
-        if params is None:
+        if params == "by_name":
             match = " or ".join(f"contains(AttractionName,'{odata_quote(n)}')" for n in missing)
             params = {"$filter": f"PostalAddress/City eq '{county}' and ({match})", "$top": len(missing) * 3}
-        rows = tdx_get(ATTRACTION_PATH, params)
+        rows = city_rows if params is None else tdx_get(ATTRACTION_PATH, params)
         if isinstance(rows, dict):
             return json.dumps(rows, ensure_ascii=False)
         closed_rows += [r for r in rows if r.get("ServiceStatus") in CLOSED_STATUS]
@@ -295,7 +303,7 @@ def _details(county: str, names: list[str]) -> str:
         "city": county,
         "results": [_summarize(r, hours, fees) for r in picked],
         "not_found": [n for n, hits in found.items() if not hits and n not in closed],
-        "source": "Taiwan Tourism Administration via TDX",
+        "source": TDX_SOURCE if city_rows is None else tourism_data.SOURCE,
     }
     hints = []
     if closed:
@@ -345,6 +353,23 @@ def pins_from_answer(answer: str) -> list[dict]:
     return [_summarize(r, {}, {}) for r in picked]
 
 
+def search_rows(county: str, town: str | None = None, words=(), name_only: bool = False) -> tuple[list | dict, str]:
+    """Listings in a county (and district) whose name, or description unless name_only, contains any of
+    `words`, and the source to cite. The official daily file holds every listing; without it, filter on
+    the TDX side, since a big city (New Taipei) has more than the 500-row cap."""
+    rows = tourism_data.listings("attractions", county, town, words, name_only)
+    if rows is not None:
+        return rows, tourism_data.SOURCE
+    filters = [f"PostalAddress/City eq '{county}'"]
+    if town:
+        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
+    if words:
+        fields = ("AttractionName",) if name_only else ("AttractionName", "Description")
+        match = " or ".join(f"contains({f},'{odata_quote(w)}')" for w in words for f in fields)
+        filters.append(f"({match})")
+    return tdx_get(ATTRACTION_PATH, {"$filter": " and ".join(filters), "$top": RANK_POOL}), TDX_SOURCE
+
+
 def find_attractions(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
                      names: list[str] | None = None) -> str:
     place = resolve_city(city)
@@ -362,17 +387,7 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
 
     kw = (keyword or "").strip()
     words = _search_words(kw)
-    # Filter on the TDX side: a big city (New Taipei) has more than the 500-row cap.
-    filters = [f"PostalAddress/City eq '{county}'"]
-    if town:
-        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
-    if words:
-        match = " or ".join(
-            f"contains(AttractionName,'{odata_quote(w)}') or contains(Description,'{odata_quote(w)}')"
-            for w in words
-        )
-        filters.append(f"({match})")
-    rows = tdx_get(ATTRACTION_PATH, {"$filter": " and ".join(filters), "$top": RANK_POOL})
+    rows, source = search_rows(county, town, words)
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
 
@@ -410,7 +425,7 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
                 "show it to a taxi driver. open_time and ticket_info are the only source for hours and prices. "
                 "When one is null, say the official listing does not include it and suggest checking the "
                 "place's official site.",
-        "source": "Taiwan Tourism Administration via TDX",
+        "source": source,
     }, ensure_ascii=False)
 
 

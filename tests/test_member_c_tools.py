@@ -30,6 +30,7 @@ def fake_tdx(monkeypatch):
 
     monkeypatch.setattr(lodging, "tdx_get", fake)
     monkeypatch.setattr(food, "tdx_get", fake)
+    monkeypatch.setattr(food.attractions, "tdx_get", fake)  # night markets are attraction listings
     return calls, responses
 
 
@@ -93,6 +94,8 @@ def test_food_night_market_adds_local_tips(fake_tdx):
     out = json.loads(food.find_local_food("Tainan", keyword="night market"))
     assert out["kind"] == "night_market"
     assert any("花園夜市" in m["name"] for m in out["local_tips"])
+    calls, _ = fake_tdx
+    assert "contains(AttractionName,'夜市')" in calls[0] and "Description" not in calls[0]
 
 
 def test_food_no_results_hints_chinese_keyword(fake_tdx):

@@ -2,10 +2,10 @@
 
 import json
 
+from tools import attractions, tourism_data
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
 RESTAURANT_PATH = "tourism/service/odata/V2/Tourism/Restaurant"
-ATTRACTION_PATH = "tourism/service/odata/V2/Tourism/Attraction"
 
 # TDX data is in Chinese. Map what a foreign traveler types to what the listings say.
 KEYWORDS_ZH = {
@@ -61,12 +61,10 @@ def _dedupe(items: list[dict]) -> list[dict]:
 
 
 def _night_markets(county: str, town: str | None, limit: int) -> str:
-    filters = [f"PostalAddress/City eq '{county}'", "contains(AttractionName,'夜市')"]
-    if town:
-        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
-    rows = tdx_get(ATTRACTION_PATH, {"$filter": " and ".join(filters), "$top": limit * 2})
+    rows, source = attractions.search_rows(county, town, ("夜市",), name_only=True)
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
+    rows = [r for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
     markets = _dedupe([_summarize(r, "AttractionName") for r in rows])[:limit]
     local = LOCAL_NIGHT_MARKETS.get(county, [])
     if not markets and not local:
@@ -82,7 +80,7 @@ def _night_markets(county: str, town: str | None, limit: int) -> str:
         "results": markets,
         "local_tips": local,
         "note": "Most night markets open around 17:00-24:00. Rotating markets only open on the listed days.",
-        "source": "Taiwan Tourism Administration via TDX" + (", plus local knowledge" if local else ""),
+        "source": source + (", plus local knowledge" if local else ""),
     }, ensure_ascii=False)
 
 
@@ -103,13 +101,17 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
         return _night_markets(county, town, limit)
 
     term = KEYWORDS_ZH.get(kw.lower(), kw)
-    filters = [f"PostalAddress/City eq '{county}'"]
-    if town:
-        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
-    if term:
-        q = odata_quote(term)
-        filters.append(f"(contains(RestaurantName,'{q}') or contains(Description,'{q}'))")
-    rows = tdx_get(RESTAURANT_PATH, {"$filter": " and ".join(filters), "$top": limit * 3})
+    rows = tourism_data.listings("restaurants", county, town, (term,) if term else ())
+    source = tourism_data.SOURCE
+    if rows is None:  # the daily file is not loaded: ask TDX
+        filters = [f"PostalAddress/City eq '{county}'"]
+        if town:
+            filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
+        if term:
+            q = odata_quote(term)
+            filters.append(f"(contains(RestaurantName,'{q}') or contains(Description,'{q}'))")
+        rows = tdx_get(RESTAURANT_PATH, {"$filter": " and ".join(filters), "$top": limit * 3})
+        source = "Taiwan Tourism Administration via TDX"
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
 
@@ -132,7 +134,7 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
         "results": results,
         "note": "Names and descriptions are in Chinese: translate them for the user and keep the "
                 "Chinese name so they can show it to a taxi driver.",
-        "source": "Taiwan Tourism Administration via TDX",
+        "source": source,
     }, ensure_ascii=False)
 
 

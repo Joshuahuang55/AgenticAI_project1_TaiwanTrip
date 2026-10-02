@@ -5,6 +5,7 @@ import logging
 import os
 import uuid
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import litellm
@@ -43,7 +44,7 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
 load_dotenv()
 
 from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
-from tools import attractions  # noqa: E402
+from tools import attractions, tourism_data  # noqa: E402
 import guardrails  # noqa: E402
 from guardrails import ChatState  # noqa: E402
 
@@ -169,7 +170,15 @@ def get_session(session_id: str) -> ChatState:
 
 # --- FastAPI App ---
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # The daily tourism files download in the background (their server can take a minute or more), so a
+    # cold start stays fast; the tools use TDX until they arrive.
+    tourism_data.warm()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
 
