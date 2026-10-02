@@ -93,7 +93,7 @@ def test_missing_or_failed_hours_and_fees_become_null(fake_tdx):
     out = json.loads(attractions.find_attractions("Tainan"))
     assert out["results"][0]["open_time"] is None
     assert out["results"][0]["ticket_info"] is None
-    assert "never guess" in out["note"]
+    assert "only source for hours and prices" in out["note"]
 
 
 def test_closed_places_are_skipped(fake_tdx):

@@ -9,6 +9,7 @@ dependencies = [
     "litellm>=1.50",
     "google-cloud-aiplatform>=1.40.0",
     "requests>=2.31",
+    "openai-agents[litellm]>=0.20.0",
 ]
 
 [dependency-groups]

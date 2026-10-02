@@ -37,6 +37,22 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
 
+## Guardrails
+
+The agent runs on the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/guardrails/) with Gemini through its LiteLLM adapter (beta). Guardrails use the SDK's interfaces, in [guardrails.py](guardrails.py):
+
+| Layer | Check | When it fails |
+|---|---|---|
+| Input (blocking, before the model) | Message over 2,000 characters; a Gemini classifier (safety filter off, so it can read what it labels) flags prompt injection, harmful requests, or requests outside Taiwan travel | Tripwire: fixed reply, no main model or TDX call, message kept out of history. A classifier error allows the message |
+| Tool input | Any string argument over 200 characters | Rejected: the model gets an error and hint instead of a tool run |
+| Tool output | Result text that looks like instructions (e.g. "ignore previous instructions") | Rejected: the model gets an error and hint; the result is hidden from the trip board |
+| Output | Answer repeats a system-prompt sentence, or names a Chinese lodging (in parentheses) that no tool result or user message contains | Tripwire: fixed reply |
+| Output cleanup (after the run) | Links to a host that is not official (`.gov.tw`, `taiwan.net.tw`, `thsrc.com.tw`, `transportdata.tw`) and not in a tool result or user message | The link is removed (Markdown links keep their text) and the rest of the answer is shown; history keeps the cleaned answer |
+| Model | Gemini safety settings block medium-or-higher harassment, hate, sexual, and dangerous content | Fixed reply |
+| Agent | At most 8 model turns; model errors are logged, not shown | Fixed reply |
+
+Each tool still validates its own arguments. Sessions keep the last 20 user turns, with at most 200 sessions in memory. SDK tracing is off, so chats are not sent to OpenAI. Not covered: rate limiting, PII, lodging names written only in English (the register lists Chinese names only).
+
 ## Run locally
 
 1. A GCP project with billing and the Vertex AI API enabled, then `gcloud auth application-default login`.
@@ -56,8 +72,9 @@ Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID`, `TDX_CLIENT_S
 ## Layout
 
 ```
-app.py              routes, session store, agent loop, sight pins
-prompts/system.txt  system prompt (with {today} filled in at session start)
+app.py              routes, session store, Agents SDK agent and tools, sight pins
+guardrails.py       input, output, and tool guardrails
+prompts/system.txt  system prompt (with {today} filled in on each turn)
 tools/__init__.py   tool registry (TOOLS + run_tool)
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/lodging.py    legal_stay_check
@@ -68,5 +85,5 @@ tools/holidays.py   crowd_risk_check (official calendar, estimated travel pressu
 tools/attractions.py find_attractions (and pins for the places an answer recommends)
 tools/weather.py    typhoon_backup_plan (CWA forecast and typhoon warnings)
 static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
-tests/              tool tests
+tests/              tool, harness, and guardrail tests
 ```

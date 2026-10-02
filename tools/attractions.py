@@ -337,8 +337,9 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         # Names only, by district: lets the model spot famous places the ID-ordered picks missed.
         "more_candidates": _by_district([r for r in ranked if r not in rows]),
         "note": "Names and descriptions are in Chinese: translate them and keep the Chinese name so the user can "
-                "show it to a taxi driver. open_time or ticket_info null means the source has no data: say "
-                "so and suggest checking the official site; never guess.",
+                "show it to a taxi driver. open_time and ticket_info are the only source for hours and prices. "
+                "When one is null, say the official listing does not include it and suggest checking the "
+                "place's official site.",
         "source": "Taiwan Tourism Administration via TDX",
     }, ensure_ascii=False)
 

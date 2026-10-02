@@ -1,17 +1,33 @@
+import asyncio
 import datetime as dt
 import json
+import logging
 import os
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 import litellm
 import uvicorn
+from agents import (
+    Agent,
+    FunctionTool,
+    InputGuardrailTripwireTriggered,
+    MaxTurnsExceeded,
+    ModelRefusalError,
+    ModelSettings,
+    OutputGuardrailTripwireTriggered,
+    Runner,
+    set_tracing_disabled,
+)
+from agents.extensions.models.litellm_model import LitellmModel
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 HERE = Path(__file__).parent
+log = logging.getLogger("taiwan_trip")
 
 
 def load_dotenv(path: Path = HERE / ".env") -> None:
@@ -28,59 +44,128 @@ load_dotenv()
 
 from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
 from tools import attractions  # noqa: E402
+import guardrails  # noqa: E402
+from guardrails import ChatState  # noqa: E402
 
 # --- Config ---
 
 SYSTEM_PROMPT = (HERE / "prompts" / "system.txt").read_text(encoding="utf-8")
 MAX_TOOL_ROUNDS = 8
+MAX_USER_TURNS = 20  # history kept per session, cut at user messages so tool calls stay paired
+MAX_SESSIONS = 200
+MAX_KEPT_TOOL_CALLS = 100
 
-# --- The Harness ---
+# Output moderation by Gemini: block medium-or-higher harm in every category, not the model default.
+SAFETY_SETTINGS = [{"category": f"HARM_CATEGORY_{c}", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+                   for c in ("HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT")]
+
+# Traces go to OpenAI by default; this app has no OpenAI key and keeps chats off third-party servers.
+set_tracing_disabled(True)
+
+# --- The Agent ---
 
 
-def run_agent(messages: list[dict]) -> tuple[str, list[dict]]:
-    """Complete until the model answers without asking for a tool.
+def make_tool(schema: dict) -> FunctionTool:
+    """Wrap a registered tool so the SDK runs it. run_tool keeps the error-and-hint replies."""
+    spec = schema["function"]
 
-    Returns the final text and a record of every tool call made along the way.
-    """
-    tool_calls = []
+    async def invoke(ctx, arguments: str) -> str:
+        # Every tool call needs a tool reply, or the session's history is broken for later turns.
+        try:
+            args = json.loads(arguments or "{}")
+        except json.JSONDecodeError:
+            args = {"_raw": arguments}
+            result = json.dumps({"error": "Arguments were not valid JSON.",
+                                 "hint": "Call the tool again with a JSON object of arguments."})
+        else:
+            result = await asyncio.to_thread(run_tool, spec["name"], args)
+        ctx.context.tool_calls.append({"id": ctx.tool_call_id, "name": spec["name"], "args": args, "result": result})
+        return result
 
-    for _ in range(MAX_TOOL_ROUNDS):
-        reply = litellm.completion(
-            model="vertex_ai/gemini-3.5-flash-lite",
-            vertex_location="global",
-            messages=messages,
-            tools=TOOLS,
-        ).choices[0].message
+    return FunctionTool(
+        name=spec["name"],
+        description=spec["description"],
+        params_json_schema=spec["parameters"],
+        on_invoke_tool=invoke,
+        strict_json_schema=False,  # optional arguments; run_tool validates them
+        tool_input_guardrails=[guardrails.check_tool_args],
+        tool_output_guardrails=[guardrails.check_tool_result],
+    )
 
-        # Append assistant's reply (text, tool calls, or both) to the context.
-        # model_dump() keeps it a plain dict: the raw object carries provider-specific
-        # fields that trip Pydantic when LiteLLM re-serializes it next round.
-        messages += [reply.model_dump()]
 
-        if not reply.tool_calls:
-            return reply.content, tool_calls
+def instructions(ctx, agent) -> str:
+    return SYSTEM_PROMPT.format(today=dt.date.today().strftime("%A, %Y-%m-%d"))
 
-        # The harness, not the model, runs each tool and appends the result
-        for call in reply.tool_calls:
-            # Every tool call needs a tool reply, or the session's history is broken for later turns.
-            try:
-                args = json.loads(call.function.arguments or "{}")
-                result = run_tool(call.function.name, args)
-            except json.JSONDecodeError:
-                args = {"_raw": call.function.arguments}
-                result = json.dumps({"error": "Arguments were not valid JSON.",
-                                     "hint": "Call the tool again with a JSON object of arguments."})
-            tool_calls += [{"name": call.function.name, "args": args, "result": result}]
 
-            messages += [{"role": "tool", "tool_call_id": call.id, "content": result}]
+AGENT = Agent[ChatState](
+    name="Taiwan Like a Local",
+    instructions=instructions,
+    model=LitellmModel("vertex_ai/gemini-3.5-flash-lite"),
+    model_settings=ModelSettings(extra_args={"vertex_location": "global", "safety_settings": SAFETY_SETTINGS}),
+    tools=[make_tool(schema) for schema in TOOLS],
+    input_guardrails=[guardrails.check_input],
+    output_guardrails=[guardrails.make_output_guardrail(SYSTEM_PROMPT)],
+)
 
-    return "Sorry, I hit my tool-call limit before finishing.", tool_calls
+
+def trim_history(items: list) -> list:
+    """Keep the last MAX_USER_TURNS user turns, starting at a user message."""
+    starts = [i for i, item in enumerate(items) if item.get("role") == "user"]
+    return items[starts[-MAX_USER_TURNS]:] if len(starts) > MAX_USER_TURNS else items
+
+
+async def run_turn(state: ChatState, message: str) -> str:
+    """Run one user turn. Guardrail trips and failures answer with a fixed message and leave history unchanged."""
+    # Bound what a long session keeps: these feed the output guardrail's grounding check.
+    state.tool_calls = state.tool_calls[-MAX_KEPT_TOOL_CALLS:]
+    state.user_texts = state.user_texts[-MAX_USER_TURNS:]
+    state.turn_start = len(state.tool_calls)
+    state.user_texts.append(message)  # the output guardrail may cite names the user typed
+    try:
+        result = await Runner.run(AGENT, state.history + [{"role": "user", "content": message}],
+                                  context=state, max_turns=MAX_TOOL_ROUNDS)
+    except InputGuardrailTripwireTriggered as e:
+        state.user_texts.pop()
+        return guardrails.REJECTIONS[e.guardrail_result.output.output_info["reason"]]
+    except OutputGuardrailTripwireTriggered as e:
+        return guardrails.REJECTIONS[e.guardrail_result.output.output_info["reason"]]
+    except MaxTurnsExceeded:
+        return "Sorry, I hit my tool-call limit before finishing."
+    except (ModelRefusalError, litellm.ContentPolicyViolationError):  # Gemini's safety filter
+        return guardrails.REJECTIONS["harmful"]
+    history = result.to_input_list()
+    answer = str(result.final_output or "")
+    clean = guardrails.redact_links(answer, state.sources())
+    if clean != answer:
+        replace_last_answer(history, answer, clean)  # so the model does not repeat the link next turn
+    state.history = trim_history(history)
+    # Empty when Gemini's safety filter blocks the answer, or the model returns nothing.
+    return clean or "Sorry, I couldn't answer that. Please try asking another way."
+
+
+def replace_last_answer(history: list, old: str, new: str) -> None:
+    for item in reversed(history):
+        if item.get("role") == "assistant" and isinstance(item.get("content"), list):
+            for part in item["content"]:
+                if isinstance(part, dict) and part.get("text") == old:
+                    part["text"] = new
+                    return
 
 
 # --- Session Store ---
 
-# session_id -> list of messages. In-memory, single process.
-sessions: dict[str, list] = {}
+# session_id -> ChatState. In-memory, single process; the oldest session is dropped past MAX_SESSIONS.
+sessions: OrderedDict[str, ChatState] = OrderedDict()
+
+
+def get_session(session_id: str) -> ChatState:
+    if session_id not in sessions and len(sessions) >= MAX_SESSIONS:
+        oldest, _ = sessions.popitem(last=False)
+        attractions.forget_session(oldest)
+    state = sessions.pop(session_id, None) or ChatState()
+    sessions[session_id] = state  # most recently used last
+    return state
+
 
 # --- FastAPI App ---
 
@@ -107,26 +192,22 @@ def index():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
-    # Get or create the session
+async def chat(request: ChatRequest):
     session_id = request.session_id or str(uuid.uuid4())
-    if session_id not in sessions:
-        today = dt.date.today().strftime("%A, %Y-%m-%d")
-        sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT.format(today=today)}]
-
-    # Append user's message to the context
-    sessions[session_id] += [{"role": "user", "content": request.message}]
+    state = get_session(session_id)
 
     attractions.use_session(session_id)
     map_pins = []
     try:
-        response, tool_calls = run_agent(sessions[session_id])
+        response = await run_turn(state, request.message)
+        tool_calls = [{k: c[k] for k in ("name", "args", "result")} for c in state.turn_calls()]
         # Sights: search results are unpinned candidates; pin only the places the answer recommends.
         if any(c["name"] == "find_attractions" for c in tool_calls):
-            map_pins = attractions.pins_from_answer(response or "")
-    except Exception as e:
-        # Auth, billing, a model that is not running: show it in the chat, not as a 500.
-        response, tool_calls = f"Model call failed: {type(e).__name__}: {str(e)[:300]}", []
+            map_pins = attractions.pins_from_answer(response)
+    except Exception:
+        # Auth, billing, a model that is not running: details go to the log, not to the user.
+        log.exception("Model call failed")
+        response, tool_calls = "Sorry, I couldn't reach the model. Please try again in a moment.", []
 
     return ChatResponse(response=response, session_id=session_id, tool_calls=tool_calls, map_pins=map_pins)
 

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`app.py` contains FastAPI routes and the LiteLLM agent loop; `prompts/system.txt` supplies the system prompt. `tools/` holds the registry, TDX client, and data tools, including `tools/data/crowd_calibration.json`. `scripts/calibrate_crowd_risk.py` refreshes that data. `static/` is the plain HTML, CSS, and JavaScript frontend; `tests/` contains pytest tests. See `README.md` for tool behavior.
+`app.py` contains FastAPI routes and the OpenAI Agents SDK agent (Gemini via LiteLLM); `guardrails.py` holds its input, output, and tool guardrails; `prompts/system.txt` supplies the system prompt. `tools/` holds the registry, TDX client, and data tools, including `tools/data/crowd_calibration.json`. `scripts/calibrate_crowd_risk.py` refreshes that data. `static/` is the plain HTML, CSS, and JavaScript frontend; `tests/` contains pytest tests. See `README.md` for tool behavior.
 
 ## Build, Test, and Development Commands
 
