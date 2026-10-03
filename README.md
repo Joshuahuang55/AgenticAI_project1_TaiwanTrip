@@ -70,7 +70,7 @@ they do not establish whether Gemini follows this policy.
 | Tool | What it does | Data source |
 |---|---|---|
 | `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
-| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets, award winners first; `style: local` for where locals eat, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
+| `find_local_food` | Restaurants by dish and night markets; preference evidence first when criteria are supplied, then awards/local score. Returns sourced facts, missing fields, and comparison checks; `style: local` for locals' favorites | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
@@ -80,6 +80,66 @@ they do not establish whether Gemini follows this policy.
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
 
 Attractions and restaurants come from the Tourism Administration's daily open-data files, downloaded in the background at startup and refreshed daily ([tools/tourism_data.py](tools/tourism_data.py)). They hold every listing, with no TDX quota and no 500-row cap per query; until they load, or if the download fails, the tools query TDX. Hotels stay on TDX: their file is too large for a 512 MiB instance. Data is used under the [Open Government Data License, version 1.0](https://data.gov.tw/license).
+
+### Tool output review and comparison boundaries
+
+| Tool | Facts the agent can compare | Missing information / limits |
+|---|---|---|
+| Food | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated |
+| Attractions | Categories, description, address, listed hours and admission information | Many hours/fees are missing; no measured visit duration or walking time |
+| Lodging | Registration, license, address, certification, owner-reported price range | Registration is not a quality rating; no live rooms or booking prices |
+| Rail | Train type/number, departure, arrival, duration, published fare | At most three options per query; no live seats/delays; fares can be missing |
+| Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
+| Weather | Forecast dates, rain chance, temperature, warning, backup listings | Limited forecast horizon; seasonal notes are not forecasts and warnings are current |
+| Exchange | Rate, rate date, converted amount, sampled historical comparison | Mid-market snapshot; no actual cash-counter quote or travel prices; average uses weekly samples |
+
+Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
+as **unavailable**. Source claims are **reported**, not independently verified. Compare only
+available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
+The first implementation of explicit fact/comparison fields is food; the other tools retain
+their existing domain outputs. Existing `/chat` fields and map behavior are preserved.
+
+### Food preference comparisons
+
+Optional arguments `dietary` (`vegetarian`/`vegan`), `price_preference` (`budget`/`mid_range`/`any`),
+`max_price_twd`, and `confirmed_only` accompany existing city/district/dish filters. Keep them
+on `names` lookups. Set `confirmed_only: true` when the user requests only confirmed matches;
+this requires reported support for every requested criterion, not live independent verification.
+`budget` selects the relative `$` category and `mid_range` allows `$`/`$$`; unknown bands remain
+unconfirmed. A numeric cap is explicitly per person per meal in TWD. No returned band verifies
+that exact cap; lower known bands simply rank first among otherwise equal unconfirmed leads.
+
+Each restaurant's `facts` contains `value`, `status`, and `source`, plus dietary evidence when
+available. `comparison` checks each requested criterion and marks the overall fit as
+`reported_match`, `needs_confirmation`, `conflict`, or `not_requested`. Conflicting options
+appear in `excluded`, not `results`. With `confirmed_only`, uncertain candidates are also excluded
+without their names; exact meal caps currently cannot be confirmed. `comparison_summary` counts
+returned matches/leads, excluded conflicts, and excluded unconfirmed candidates. Ranking favors
+dietary reports, then dietary name/cuisine indications, ahead of candidates with no dietary
+evidence. It next compares other criteria, dietary variety, relative prices, and keyword/awards.
+Ordinary recommendations offer promising dietary leads with brief caveats when reports or
+prices are unavailable; "cheap" does not require exact meal-price confirmation. Constrained
+searches do not inject lower-fit local gems just to fill the list. Searches are not exhaustive.
+
+This is everyday travel planning: useful suggestions and reasonable estimates take priority
+over exhaustive verification. Traveler-facing answers start with choices and concrete comparisons. Evidence/status labels
+stay internal; relevant data gaps are combined into one short practical note after suggestions.
+Missing fields alone do not trigger a refusal. Strict evidence filtering requires an explicit
+request for confirmed matches. This response policy also applies to other recommendation tools.
+
+OSM dietary tags retain their [vegetarian](https://wiki.openstreetmap.org/wiki/Key:diet:vegetarian)
+and [vegan](https://wiki.openstreetmap.org/wiki/Key:diet:vegan) distinctions. Names/cuisine terms
+are only indications; contradictory tags remain uncertain. The builder now preserves dietary
+tags and reported districts on future intentional refreshes. Existing bundled records without
+these tags remain unknown; this change does not regenerate the dataset or manufacture facts.
+Merged listings preserve the source of borrowed hours/dietary information.
+
+Test in a fresh trip: `Recommend vegetarian food around Ximen in Taipei. I prefer cheap places.`
+Then `What about vegan options under TWD 300 per person per meal?`
+Inspect dietary/price arguments and checks: the agent should explain its choice and alternatives,
+and disclose unconfirmed dietary evidence and exact prices. Missing results must not become
+invented recommendations. Automated comparison tests use competing fictional candidates;
+real-model behavior needs a separate conversation check.
 
 ## Guardrails
 
@@ -140,6 +200,7 @@ tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/tourism_data.py daily open-data files for attractions and restaurants, searched in memory
 tools/lodging.py    legal_stay_check
 tools/food.py       find_local_food
+tools/food_preferences.py  sourced food facts and deterministic preference comparisons
 tools/exchange.py   twd_exchange
 tools/transport.py  hsr_trip_planner (THSR and TRA)
 tools/holidays.py   crowd_risk_check (official calendar, estimated travel pressure)

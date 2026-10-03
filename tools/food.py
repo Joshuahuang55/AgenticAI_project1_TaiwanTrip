@@ -7,7 +7,7 @@ import math
 import re
 from pathlib import Path
 
-from tools import attractions, tourism_data
+from tools import attractions, food_preferences, tourism_data
 from tools.tdx_client import odata_quote, resolve_city, tdx_get
 
 RESTAURANT_PATH = "tourism/service/odata/V2/Tourism/Restaurant"
@@ -17,7 +17,7 @@ DATA = Path(__file__).parent / "data"
 # or Kaohsiung. They are shaped like official rows, so both are searched and summarized alike.
 OSM_PATH = DATA / "osm_food.json.gz"
 OSM_SOURCE = "OpenStreetMap (© OpenStreetMap contributors, ODbL)"
-OSM_NOTE = "From OpenStreetMap, not the official register: no description; check hours before going."
+OSM_NOTE = "OpenStreetMap listing, not the official register."
 DUPLICATE_KM = 0.15  # an OSM place this close to an official one with a matching name is the same shop
 
 # OSM id -> {"fame", "local", "awards", "known_for", "name_en", "price", "fine_dining", "closed"}, plus the
@@ -26,6 +26,7 @@ FAME_PATH = DATA / "food_fame.json"
 _fame_file = json.loads(FAME_PATH.read_text(encoding="utf-8")) if FAME_PATH.exists() else {}
 FOOD_FAME: dict[str, dict] = _fame_file.get("places", {})
 AWARD_SOURCE = "Michelin Guide Taiwan via michelin-my-maps, and 500盤/500碗 by 500輯: research and education use only"
+PRICE_SOURCE = "Michelin Guide Taiwan (bundled relative price bands; research and education use only)"
 MICHELIN_NOTE = "From the Michelin Guide, not OpenStreetMap: the Chinese name is a translation; show the address."
 
 STYLES = attractions.STYLES
@@ -79,6 +80,8 @@ def _osm_row(p: dict) -> dict:
             "PostalAddress": {"City": p["city"], "Town": p.get("t"), "StreetAddress": p.get("a") or p.get("addr")},
             "Description": "", "ServiceTimeInfo": p.get("h"),
             "NameEn": p.get("en"), "NameJa": p.get("ja"), "Cuisine": p.get("c") or "",
+            "DietaryTags": {key: p[short] for key, short in (("vegetarian", "dv"), ("vegan", "dg")) if p.get(short)},
+            "DistrictStatus": p.get("ts", "estimated") if p.get("t") else "unknown",
             "Source": "Michelin Guide" if p["id"].startswith("michelin:") else "OpenStreetMap"}
 
 
@@ -155,8 +158,17 @@ def _merge(official: list[dict], osm: list[dict]) -> list[dict]:
             continue
         twin.setdefault("NameEn", o["NameEn"])
         twin.setdefault("FameID", o["RestaurantID"])
+        fields = twin.setdefault("FieldSources", {})
+        if not twin.get("Cuisine") and o.get("Cuisine"):
+            twin["Cuisine"] = o["Cuisine"]
+            fields["cuisine"] = o["Source"]
+        if not twin.get("DietaryTags") and o.get("DietaryTags"):
+            twin["DietaryTags"] = o["DietaryTags"]
+            fields["dietary"] = o["Source"]
         if not (twin.get("ServiceTimeInfo") or "").strip():
             twin["ServiceTimeInfo"] = o["ServiceTimeInfo"]
+            if o["ServiceTimeInfo"]:
+                fields["opening_hours"] = o["Source"]
     return out
 
 
@@ -186,6 +198,12 @@ def _summarize(r: dict, name_key: str, pin: bool = False) -> dict:
     if pin:
         out.update(lat=lat, lon=lon)
     fame = _fame(r)
+    facts = r.get("_Facts") or food_preferences.facts_for(r, fame, r.get("Source") or tourism_data.SOURCE, PRICE_SOURCE)
+    out["facts"] = facts
+    out["source"] = r.get("Source") or tourism_data.SOURCE
+    out["missing_fields"] = [key for key, f in facts.items() if f["status"] == "unknown"]
+    if r.get("_Comparison"):
+        out["comparison"] = r["_Comparison"]
     if fame.get("name_en") or r.get("NameEn"):
         out["name_en"] = fame.get("name_en") or r["NameEn"]
     if fame.get("awards"):
@@ -194,7 +212,7 @@ def _summarize(r: dict, name_key: str, pin: bool = False) -> dict:
         out["known_for"] = fame["known_for"]
     if lat and lon:  # for places with no street address
         out["map_url"] = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-    if fame.get("price"):  # Michelin's band: $ under NT$400 a person ... $$$$ over NT$2,000
+    if facts["price"]["value"]:  # a relative band, not an exact current menu price
         out["price"] = fame["price"]
     if r.get("Source") == "OpenStreetMap":
         out["note"] = OSM_NOTE
@@ -219,7 +237,8 @@ def _rank(rows: list[dict], term: str, style: str) -> list[dict]:
     key = "local" if style == "local" else "fame"
     def score(r: dict) -> tuple:
         named = bool(term) and term in (r.get("RestaurantName") or "")
-        return named, _fame(r).get(key, 0.0), len(r.get("Description") or "") >= 40
+        preference = food_preferences.priority(r["_Comparison"]) if r.get("_Comparison") else (0, 0, 0, 0, 0)
+        return *preference, named, _fame(r).get(key, 0.0), len(r.get("Description") or "") >= 40
     return sorted(rows, key=score, reverse=True)
 
 
@@ -268,10 +287,35 @@ def _more_candidates(ranked: list[dict], picked: list[dict]) -> list[str]:
             ][:MORE_CANDIDATES]
 
 
-def _details(county: str, names: list[str]) -> str:
+def _prepare(rows: list[dict], criteria: dict, source: str) -> tuple[list[dict], list[dict]]:
+    return food_preferences.prepare([dict(r, _Fame=_fame(r)) for r in rows], criteria, source, PRICE_SOURCE)
+
+
+def _result_source(rows: list[dict], fallback: str) -> str:
+    sources = []
+    for row in rows:
+        for source in [row.get("Source") or fallback, *(row.get("FieldSources") or {}).values()]:
+            if source == "OpenStreetMap":
+                source = OSM_SOURCE
+            if source not in sources:
+                sources.append(source)
+    if any(_fame(r) for r in rows):
+        sources.append(AWARD_SOURCE)
+    return ", plus ".join(sources) or fallback
+
+
+def _location_note(district: str | None) -> str | None:
+    if not district:
+        return None
+    return (f"Search scope: the whole {district} district; some district assignments are estimated. "
+            "Addresses and map links provide location details.")
+
+
+def _details(county: str, names: list[str], criteria: dict) -> str:
     """Restaurants the model names, matched loosely against the county's places (阿宗麵線 finds 阿宗麵線西門店),
     best known first."""
-    rows = [dict(r) for r in tourism_data.listings("restaurants", county) or []
+    official = tourism_data.listings("restaurants", county)
+    rows = [dict(r, Source=tourism_data.SOURCE) for r in official or []
             if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
     rows = [r for r in _merge(rows, OSM_BY_COUNTY.get(county, [])) if not _fame(r).get("closed")]
     found, not_found = [], []
@@ -282,15 +326,23 @@ def _details(county: str, names: list[str]) -> str:
             found += hits
         else:
             not_found.append(name)
+    found, excluded = _prepare(found, criteria, tourism_data.SOURCE)
+    found = _rank(found, "", "must_see")
     _remember(found, "RestaurantName")
-    source = tourism_data.SOURCE + ", plus " + OSM_SOURCE
-    if any(_fame(r) for r in found):
-        source += ", ranked with " + AWARD_SOURCE
+    source = _result_source(found, "Bundled OpenStreetMap/Michelin data" if official is None else tourism_data.SOURCE)
+    results = _dedupe([_summarize(r, "RestaurantName") for r in found])
     return json.dumps({
         "city": county,
-        "results": _dedupe([_summarize(r, "RestaurantName") for r in found]),
+        "results": results,
         "not_found": not_found,
+        "criteria": criteria,
+        "location_note": _location_note(criteria.get("district")),
+        "comparison_summary": food_preferences.summary(results, excluded),
+        "excluded": excluded,
         "note": "Recommend only places in results. A name in not_found is not in the sources: leave it out.",
+        "coverage_note": ("Official restaurant file unavailable; only bundled OpenStreetMap/Michelin records "
+                          "were searched. not_found does not establish that a restaurant does not exist."
+                          if official is None else "Official file and bundled OpenStreetMap/Michelin records searched; not exhaustive."),
         "source": source,
     }, ensure_ascii=False)
 
@@ -314,18 +366,23 @@ def pins_from_answer(answer: str) -> list[dict]:
     return [_summarize(r, r["_name_key"], pin=True) for _, r in sorted(found, key=lambda x: x[0])]
 
 
-def _night_markets(county: str, town: str | None, limit: int) -> str:
+def _night_markets(county: str, town: str | None, limit: int, criteria: dict) -> str:
     rows, source = attractions.search_rows(county, town, ("夜市",), name_only=True)
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
     rows = [r for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
+    rows = [dict(r, Source=source) for r in rows]
+    rows, excluded = _prepare(rows, criteria, source)
     markets = _dedupe([_summarize(r, "AttractionName") for r in rows])[:limit]
     _remember(rows, "AttractionName")
-    local = LOCAL_NIGHT_MARKETS.get(county, [])
+    local = [tip for tip in LOCAL_NIGHT_MARKETS.get(county, []) if not town or town in tip["address"]]
     if not markets and not local:
         return json.dumps({
             "city": county,
             "results": [],
+            "source": source,
+            "criteria": criteria,
+            "comparison_summary": food_preferences.summary([], excluded),
             "hint": "No night markets are registered for this city. Suggest a nearby big city "
                     "(Taipei, Taichung, Tainan, Kaohsiung) or search food with another keyword.",
         }, ensure_ascii=False)
@@ -333,31 +390,53 @@ def _night_markets(county: str, town: str | None, limit: int) -> str:
         "city": county,
         "kind": "night_market",
         "results": markets,
+        "criteria": criteria,
+        "comparison_summary": food_preferences.summary(markets, excluded),
         "local_tips": local,
-        "note": "Most night markets open around 17:00-24:00. Rotating markets only open on the listed days.",
+        "note": "Rotating market days are local tips. Dietary/menu facts describe individual stalls, "
+                "not the market as a whole.",
         "source": source + (", plus local knowledge" if local else ""),
     }, ensure_ascii=False)
 
 
 def find_local_food(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
-                    style: str = "must_see", names: list[str] | None = None) -> str:
+                    style: str = "must_see", names: list[str] | None = None,
+                    dietary: str | None = None, price_preference: str | None = None,
+                    max_price_twd: float | None = None, confirmed_only: bool = False) -> str:
     place = resolve_city(city)
     if place is None:
         return attractions.unknown_city(city)
     county, town = place
-    if names:
-        return _details(county, names)
     town = district or town
     limit = max(1, min(int(limit), 10))
     if style not in STYLES:
         return attractions.unknown_style(style, "places locals rate that few visitors know")
 
     kw = (keyword or "").strip()
+    dietary = dietary or food_preferences.DIET_KEYWORDS.get(kw.lower())
+    if not isinstance(confirmed_only, bool):
+        return json.dumps({"error": "confirmed_only must be a boolean.", "hint": "Use true or false."})
+    if dietary is not None and dietary not in food_preferences.DIETARY:
+        return json.dumps({"error": "Unsupported dietary preference.", "hint": "Use vegetarian or vegan. "
+                           "Other restrictions need direct restaurant confirmation; do not invent support."})
+    if price_preference is not None and price_preference not in food_preferences.PRICE_PREFERENCES:
+        return json.dumps({"error": "Unsupported price preference.", "hint": "Use budget, mid_range, or any."})
+    if max_price_twd is not None and (isinstance(max_price_twd, bool) or not isinstance(max_price_twd, (int, float))
+                                    or not math.isfinite(max_price_twd) or max_price_twd <= 0):
+        return json.dumps({"error": "max_price_twd must be a positive finite number.",
+                           "hint": "Use a stated TWD per-person meal cap; do not guess currency or scope."})
+    criteria = {"district": town, "dietary": dietary, "price_preference": price_preference,
+                "max_price_twd": max_price_twd, "confirmed_only": confirmed_only}
+    constrained = bool(town or dietary or (price_preference and price_preference != "any") or max_price_twd)
+    if names:
+        return _details(county, names, criteria)
     if kw.lower() in NIGHT_MARKET_WORDS:
-        return _night_markets(county, town, limit)
+        return _night_markets(county, town, limit, criteria)
 
     fine = _asks_fine_dining(kw)
-    term = "" if fine else KEYWORDS_ZH.get(kw.lower(), kw)  # fine dining is a kind of place, not a word in names
+    # Dietary tags may be present even when a restaurant name contains no dietary word.
+    diet_keyword = kw.lower() in food_preferences.DIET_KEYWORDS
+    term = "" if fine or diet_keyword else KEYWORDS_ZH.get(kw.lower(), kw)
     rows = tourism_data.listings("restaurants", county, town, (term,) if term else ())
     source = tourism_data.SOURCE
     if rows is None:  # the daily file is not loaded: ask TDX
@@ -371,26 +450,29 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
         source = "Taiwan Tourism Administration via TDX"
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
-    rows = [dict(r) for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
-    osm = _osm_places(county, "" if fine else kw, term, town)
+    rows = [dict(r, Source=source) for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
+    osm = _osm_places(county, "" if fine or diet_keyword else kw, term, town)
     if osm:
         rows = _merge(rows, osm)
         if any(r.get("Source") == "OpenStreetMap" for r in rows):
             source += ", plus " + OSM_SOURCE
     rows = [r for r in rows if not _fame(r).get("closed")]
+    rows, excluded = _prepare(rows, criteria, source)
 
-    ranked = _few_fine_dining(_one_per_name(_rank(rows, term, style)), limit, kw)
-    if fine:
+    ranked = _one_per_name(_rank(rows, term, style))
+    if not constrained:
+        ranked = _few_fine_dining(ranked, limit, kw)
+    if fine and not constrained:
         ranked.sort(key=lambda r: _fame(r).get("fine_dining", False), reverse=True)
     picked = ranked[:limit]
-    gems = _local_gems(ranked, picked, limit, kw) if style == "must_see" and limit >= 5 else []
+    gems = _local_gems(ranked, picked, limit, kw) if not constrained and style == "must_see" and limit >= 5 else []
     picked = picked[:limit - len(gems)] + gems
     _remember(picked + [r for r in ranked if r not in picked and (_fame(r).get("awards") or _fame(r).get("known_for"))
                         ][:MORE_CANDIDATES], "RestaurantName")
     results = _dedupe([dict(_summarize(r, "RestaurantName"), **({"local_gem": True} if r in gems else {}))
                        for r in picked])
-    if any(_fame(r) for r in picked):
-        source += ", ranked with " + AWARD_SOURCE
+    if picked:
+        source = _result_source(picked, source)
     if not results:
         hint = "No listed restaurants match. "
         if term and term.isascii():
@@ -400,7 +482,13 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
             hint += "Retry without `district` to search the whole city."
         else:
             hint += "Retry with a broader keyword, or without a keyword."
-        return json.dumps({"city": county, "keyword": kw, "results": [], "hint": hint}, ensure_ascii=False)
+        if excluded:
+            hint = ("No listings have source evidence for every required criterion; briefly explain the missing evidence."
+                    if confirmed_only else
+                    "No suitable listings remain after applying the criteria; offer a different search area or keyword.")
+        return json.dumps({"city": county, "keyword": kw, "results": [], "hint": hint, "source": source,
+                           "criteria": criteria, "comparison_summary": food_preferences.summary([], excluded),
+                           "excluded": excluded[:10]}, ensure_ascii=False)
 
     return json.dumps({
         "city": county,
@@ -408,10 +496,20 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
         "style": style,
         "searched_as": term if term != kw else None,
         "results": results,
+        "criteria": criteria,
+        "comparison_summary": food_preferences.summary(results, excluded),
+        "excluded": excluded[:10],
+        "location_note": _location_note(town),
+        "ranking_basis": "Dietary reports first, then name/cuisine indications, then candidates with no "
+                         "dietary evidence; remaining preference evidence and reported dietary variety before limited options, "
+                         "then lower reported price bands for exact-budget leads, then keyword and "
+                         "awards/local score.",
         "more_candidates": _more_candidates(ranked, picked),
         "note": "Names and descriptions are in Chinese: translate them for the user and keep the "
                 "Chinese name so they can show it to a taxi driver. Mention awards only as listed in "
-                "`awards`.",
+                "`awards`. Recommend relevant returned options and compare useful details. Evidence/status "
+                "labels are internal metadata. For ordinary suggestions, use name/cuisine evidence when tags "
+                "are missing, and combine decision-relevant gaps into one short practical note at the end.",
         "source": source,
     }, ensure_ascii=False)
 
@@ -423,8 +521,10 @@ SCHEMA = {
         "description": (
             "Find restaurants, local specialties, or night markets in a Taiwan city from the Tourism "
             "Administration's listings and OpenStreetMap, best known first (Michelin Guide, 500盤 and 500碗 "
-            "awards). Use when the user asks where or what to eat. Returns name (Chinese), awards, short "
-            "description, address, opening hours, phone, and coordinates, plus `more_candidates`: other "
+            "awards). Preference fit comes before awards when criteria are supplied. Use for where or "
+            "what to eat. Returns names, awards, description, address, hours, phone, facts with source/status, "
+            "comparison checks and missing fields for reasoning. Supports ordinary recommendations with "
+            "partial listing data. Prices are relative bands. Candidates have map links, plus `more_candidates`: other "
             "award winners by name. For night "
             "markets, pass keyword 'night market' to also get which days rotating markets open."
         ),
@@ -443,7 +543,33 @@ SCHEMA = {
                 },
                 "district": {
                     "type": "string",
-                    "description": "Optional district in Traditional Chinese to narrow the area, e.g. '中西區', '大安區'.",
+                    "description": "Optional district in Traditional Chinese from the request or saved context, "
+                                   "e.g. '中西區', '大安區'. Searches the whole district.",
+                },
+                "dietary": {
+                    "type": "string", "enum": list(food_preferences.DIETARY),
+                    "description": "Stated vegetarian or vegan need; keep keyword for the requested dish/cuisine. "
+                                   "Use on follow-ups and names lookups too. Ranks dietary reports and name/cuisine evidence first.",
+                },
+                "price_preference": {
+                    "type": "string", "enum": list(food_preferences.PRICE_PREFERENCES),
+                    "description": "Stated qualitative preference: budget uses $ bands, mid_range uses $/$$, "
+                                   "any imposes no band filter. Listings without price bands remain available. "
+                                   "Keep this on names lookups too.",
+                },
+                "max_price_twd": {
+                    "type": "number",
+                    "description": "Explicit TWD budget per person per meal, preserving the user's currency/scope. "
+                                   "Omit when the user only says cheap/budget without a numeric amount; never infer an amount. "
+                                   "Ranks lower relative price bands as budget suggestions; exact-price support "
+                                   "is recorded separately. Keep this on names lookups too.",
+                },
+                "confirmed_only": {
+                    "type": "boolean",
+                    "description": "Default false for ordinary recommendations. Set true only when the user "
+                                   "explicitly requires source evidence for every requested criterion; "
+                                   "omit candidates with unknown requested criteria. "
+                                   "Keep this on names lookups too.",
                 },
                 "limit": {"type": "integer", "description": "How many places (1-10, default 10)."},
                 "names": {

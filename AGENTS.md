@@ -15,6 +15,8 @@ Copy `.env.example` to `.env`; configure TDX, CWA, and Google Cloud credentials 
 
 ## Agent & Session Contracts
 
+This is everyday travel planning, not a verification service. Prioritize useful suggestions and reasonable estimates; keep model instructions short. Routine advice needs at most one relevant practical note, not a checklist of uncertainty.
+
 Preserve `/chat` fields `response`, `session_id`, and `tool_calls` (`name`, `args`, `result`), plus `map_pins` with tool `kind`. SDK tracing stays disabled. Sessions retain 20 user turns, at most 200 sessions, in memory; keep Cloud Run at one instance/process. Preserve tool-call/reply pairs and clear both attraction and food caches on session removal. Exact Chinese names currently drive map pins.
 
 Trip preferences outlive trimmed history within the same session. Keep user evidence, distinguish unknown from no preference, and roll back rejected/failed turns. Serialize session requests; clearing/eviction also removes preferences.
@@ -23,9 +25,11 @@ Trip preferences outlive trimmed history within the same session. Keep user evid
 
 Use four spaces and Python `snake_case`. Register tools in `tools/__init__.py`; align schemas, prompt, and README. Return JSON strings with `error` and `hint` for recoverable failures. Follow nearby frontend style; no formatter/linter is configured.
 
+Food comparisons in `tools/food_preferences.py` prioritize dietary reports and indications before price/awards, keeping unknown facts distinct from reported matches. Preserve evidence/provenance; relative bands never verify exact meal budgets. Present choices and practical comparisons first; keep status labels internal and consolidate relevant gaps into one short note. Pass criteria through name lookups; exclude conflicts and, with explicit `confirmed_only`, unknown matches. District matches do not establish landmark proximity.
+
 ## Testing Guidelines
 
-Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_trip_context.py` for preference/session checks, and `tests/test_tourism_data.py` for loader/ranking tests. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists.
+Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for competing/unknown food facts, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists.
 
 ## Data Maintenance
 
