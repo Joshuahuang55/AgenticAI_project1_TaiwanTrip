@@ -28,14 +28,32 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 | Tool | What it does | Data source |
 |---|---|---|
 | `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
-| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets | Tourism Administration via TDX, plus local night-market schedules |
+| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets, award winners first; `style: local` for where locals eat, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
-| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names | Tourism Administration via TDX |
+| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names. Name lookups tolerate different wording (士林夜市 finds 士林觀光夜市) and report closed places. Ranked by fame; `style: local` for places locals like, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
 | `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
+
+Attractions and restaurants come from the Tourism Administration's daily open-data files, downloaded in the background at startup and refreshed daily ([tools/tourism_data.py](tools/tourism_data.py)). They hold every listing, with no TDX quota and no 500-row cap per query; until they load, or if the download fails, the tools query TDX. Hotels stay on TDX: their file is too large for a 512 MiB instance. Data is used under the [Open Government Data License, version 1.0](https://data.gov.tw/license).
+
+## Guardrails
+
+The agent runs on the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/guardrails/) with Gemini through its LiteLLM adapter (beta). Guardrails use the SDK's interfaces, in [guardrails.py](guardrails.py):
+
+| Layer | Check | When it fails |
+|---|---|---|
+| Input (blocking, before the model) | Message over 2,000 characters; a Gemini classifier (safety filter off, so it can read what it labels) flags prompt injection, harmful requests, or requests outside Taiwan travel | Tripwire: fixed reply, no main model or TDX call, message kept out of history. A classifier error allows the message |
+| Tool input | Any string argument over 200 characters | Rejected: the model gets an error and hint instead of a tool run |
+| Tool output | Result text that looks like instructions (e.g. "ignore previous instructions") | Rejected: the model gets an error and hint; the result is hidden from the trip board |
+| Output | Answer repeats a system-prompt sentence, or names a Chinese lodging (in parentheses) that no tool result or user message contains | Tripwire: fixed reply |
+| Output cleanup (after the run) | Links to a host that is not official (`.gov.tw`, `taiwan.net.tw`, `thsrc.com.tw`, `transportdata.tw`) and not in a tool result or user message | The link is removed (Markdown links keep their text) and the rest of the answer is shown; history keeps the cleaned answer |
+| Model | Gemini safety settings block medium-or-higher harassment, hate, sexual, and dangerous content | Fixed reply |
+| Agent | At most 8 model turns; model errors are logged, not shown | Fixed reply |
+
+Each tool still validates its own arguments. Sessions keep the last 20 user turns, with at most 200 sessions in memory. SDK tracing is off, so chats are not sent to OpenAI. Not covered: rate limiting, PII, lodging names written only in English (the register lists Chinese names only).
 
 ## Run locally
 
@@ -43,6 +61,20 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 2. A free [TDX](https://tdx.transportdata.tw/) account and a free [CWA open data](https://opendata.cwa.gov.tw/) API key (授權碼). Copy `.env.example` to `.env` and fill in the TDX client ID and secret and `CWA_API_KEY`.
 3. `uv run app.py`, then open http://localhost:8000
 4. Tests (network mocked): `uv run pytest`
+
+## Ranking data
+
+Official listings carry no popularity signal, so the bundled files in `tools/data/` add one. Each has a build script; none is needed at runtime.
+
+| File | Built by | What it holds | Sources and terms |
+|---|---|---|---|
+| `attraction_fame.json` | [scripts/build_fame.py](scripts/build_fame.py) | Fame (Chinese Wikipedia views, article length, languages, per county), English fame (English Wikipedia views), and local fame (known in Chinese, little read in English) | Wikidata (CC0), Wikimedia pageviews |
+| `extra_attractions.json` | same | Sights the register lacks (駁二, 花園夜市), not closed | Wikidata (CC0) |
+| `local_favorites.json` | [scripts/label_local_favorites.py](scripts/label_local_favorites.py) | 226 places labeled as where locals go: Qwen labels, then a second review ([data/local_review.csv](data/local_review.csv)) | Model labels |
+| `osm_food.json.gz` | [scripts/build_osm_food.py](scripts/build_osm_food.py) | 48,401 restaurants, cafes and stalls | © OpenStreetMap contributors, [ODbL 1.0](https://www.openstreetmap.org/copyright) |
+| `food_fame.json` | [scripts/build_food_fame.py](scripts/build_food_fame.py) | Food fame (strongest award) and local score (500盤/500碗 rating, lowered by Michelin and for chains), awards per place, and Michelin restaurants OSM lacks | Michelin Guide Taiwan via [michelin-my-maps](https://github.com/ngshiheng/michelin-my-maps); 500盤 and 500碗 lists by 500輯 (udn), in `data/food_awards/` |
+
+**Research and education use only.** This is a course project. The Michelin Guide data (michelin-my-maps states its data is for research use only) and the 500盤/500碗 lists (© 500輯) are used for research and education, not commercially, and are not redistributed for other use. Remove `food_fame.json` and `data/food_awards/` before any commercial use; the food tool then ranks by OpenStreetMap order.
 
 ## Crowd-risk evidence
 
@@ -56,10 +88,12 @@ Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID`, `TDX_CLIENT_S
 ## Layout
 
 ```
-app.py              routes, session store, agent loop, sight pins
-prompts/system.txt  system prompt (with {today} filled in at session start)
+app.py              routes, session store, Agents SDK agent and tools, sight pins
+guardrails.py       input, output, and tool guardrails
+prompts/system.txt  system prompt (with {today} filled in on each turn)
 tools/__init__.py   tool registry (TOOLS + run_tool)
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
+tools/tourism_data.py daily open-data files for attractions and restaurants, searched in memory
 tools/lodging.py    legal_stay_check
 tools/food.py       find_local_food
 tools/exchange.py   twd_exchange
@@ -67,6 +101,8 @@ tools/transport.py  hsr_trip_planner (THSR and TRA)
 tools/holidays.py   crowd_risk_check (official calendar, estimated travel pressure)
 tools/attractions.py find_attractions (and pins for the places an answer recommends)
 tools/weather.py    typhoon_backup_plan (CWA forecast and typhoon warnings)
+scripts/            builds for the bundled data (fame, extra sights, local favorites, OSM food, food awards)
+data/               source lists for builds (food awards, local-favorite review)
 static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
-tests/              tool tests
+tests/              tool, harness, and guardrail tests
 ```

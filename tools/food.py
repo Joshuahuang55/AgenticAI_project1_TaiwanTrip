@@ -1,13 +1,42 @@
-"""find_local_food (member C): restaurants and night markets from the Tourism Administration via TDX."""
+"""find_local_food (member C): restaurants and night markets from the Tourism Administration and OpenStreetMap,
+ranked by awards (Michelin Guide, 500盤, 500碗) the way find_attractions ranks by fame."""
 
+import gzip
 import json
+import math
+import re
+from pathlib import Path
 
-from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
+from tools import attractions, tourism_data
+from tools.tdx_client import odata_quote, resolve_city, tdx_get
 
 RESTAURANT_PATH = "tourism/service/odata/V2/Tourism/Restaurant"
-ATTRACTION_PATH = "tourism/service/odata/V2/Tourism/Attraction"
+DATA = Path(__file__).parent / "data"
 
-# TDX data is in Chinese. Map what a foreign traveler types to what the listings say.
+# OpenStreetMap places from scripts/build_osm_food.py: the official register lists no restaurants in Taipei
+# or Kaohsiung. They are shaped like official rows, so both are searched and summarized alike.
+OSM_PATH = DATA / "osm_food.json.gz"
+OSM_SOURCE = "OpenStreetMap (© OpenStreetMap contributors, ODbL)"
+OSM_NOTE = "From OpenStreetMap, not the official register: no description; check hours before going."
+DUPLICATE_KM = 0.15  # an OSM place this close to an official one with a matching name is the same shop
+
+# OSM id -> {"fame", "local", "awards", "known_for", "name_en", "price", "fine_dining", "closed"}, plus the
+# Michelin restaurants OSM lacks, from scripts/build_food_fame.py. Research and education use only.
+FAME_PATH = DATA / "food_fame.json"
+_fame_file = json.loads(FAME_PATH.read_text(encoding="utf-8")) if FAME_PATH.exists() else {}
+FOOD_FAME: dict[str, dict] = _fame_file.get("places", {})
+AWARD_SOURCE = "Michelin Guide Taiwan via michelin-my-maps, and 500盤/500碗 by 500輯: research and education use only"
+MICHELIN_NOTE = "From the Michelin Guide, not OpenStreetMap: the Chinese name is a translation; show the address."
+
+STYLES = attractions.STYLES
+LOCAL_GEMS = 2  # a must-see search also carries up to this many places with a local score of LOCAL_GEM_MIN+
+LOCAL_GEM_MIN = 0.5
+MORE_CANDIDATES = 30
+# Stars and $$$+ prices top the fame scale, but most travelers asking where to eat want local food: unless
+# they ask for fine dining, it fills at most a third of the results.
+FINE_DINING_WORDS = ("fine dining", "michelin", "tasting menu", "omakase", "star", "fancy", "upscale", "米其林")
+
+# The listings are in Chinese: what a foreign traveler types -> what the names say.
 KEYWORDS_ZH = {
     "beef noodle": "牛肉麵", "beef noodles": "牛肉麵", "beef soup": "牛肉湯", "beef": "牛肉",
     "vegetarian": "素", "vegan": "素", "dumpling": "餃", "dumplings": "餃",
@@ -20,9 +49,17 @@ KEYWORDS_ZH = {
     "steak": "牛排", "japanese": "日式", "sushi": "壽司", "ramen": "拉麵", "barbecue": "燒烤",
     "bbq": "燒烤", "aboriginal": "原住民", "indigenous": "原住民", "hakka": "客家",
 }
+# ... and -> OSM cuisine tags, for places whose names do not say what they serve.
+CUISINE_TAGS = {
+    "beef noodle": "noodle", "beef noodles": "noodle", "noodles": "noodle", "noodle": "noodle", "ramen": "ramen",
+    "dumpling": "dumpling", "dumplings": "dumpling",
+    "coffee": "coffee_shop", "cafe": "coffee_shop", "tea": "tea", "bubble tea": "bubble_tea", "hot pot": "hot_pot",
+    "barbecue": "barbecue", "bbq": "barbecue", "seafood": "seafood", "vegetarian": "vegetarian", "vegan": "vegan",
+    "sushi": "sushi", "japanese": "japanese", "dessert": "dessert", "shaved ice": "ice_cream", "ice": "ice_cream",
+    "breakfast": "breakfast", "steak": "steak_house", "bakery": "bakery", "duck": "duck", "chicken": "chicken",
+}
 NIGHT_MARKET_WORDS = {"night market", "night markets", "夜市"}
-
-# Local knowledge: rotating night markets the TDX register does not list, and when they open.
+# Rotating night markets the register does not list, and the days they open.
 LOCAL_NIGHT_MARKETS = {
     "臺南市": [
         {"name": "Garden Night Market (花園夜市)", "open_days": "Thu, Sat, Sun evenings",
@@ -35,19 +72,135 @@ LOCAL_NIGHT_MARKETS = {
 }
 
 
-def _summarize(r: dict, name_key: str) -> dict:
-    addr = r.get("PostalAddress") or {}
+def _osm_row(p: dict) -> dict:
+    """An OSM place (or Michelin extra) shaped like an official row. Its district ("t") is estimated from
+    the nearest official listing; the street address ("a", Michelin's "addr") is there only when known."""
+    return {"RestaurantID": p["id"], "RestaurantName": p["n"], "PositionLat": p["lat"], "PositionLon": p["lon"],
+            "PostalAddress": {"City": p["city"], "Town": p.get("t"), "StreetAddress": p.get("a") or p.get("addr")},
+            "Description": "", "ServiceTimeInfo": p.get("h"),
+            "NameEn": p.get("en"), "NameJa": p.get("ja"), "Cuisine": p.get("c") or "",
+            "Source": "Michelin Guide" if p["id"].startswith("michelin:") else "OpenStreetMap"}
+
+
+def _load_osm() -> dict[str, list[dict]]:
+    if not OSM_PATH.exists():
+        return {}
+    with gzip.open(OSM_PATH, "rt", encoding="utf-8") as f:
+        places = json.load(f)["places"]
+    out: dict[str, list[dict]] = {}
+    for p in places + _fame_file.get("extras", []):
+        out.setdefault(p["city"], []).append(_osm_row(p))
+    return out
+
+
+OSM_BY_COUNTY = _load_osm()
+
+# session id -> {name: row} from that session's searches, so the answer's picks get map pins (pins_from_answer).
+_seen_by_session: dict[str, dict[str, dict]] = {}
+
+
+def _seen() -> dict[str, dict]:
+    sid = attractions._session.get()
+    if sid not in _seen_by_session and len(_seen_by_session) >= attractions.MAX_SESSIONS:
+        _seen_by_session.pop(next(iter(_seen_by_session)))  # drop the oldest session
+    seen = _seen_by_session.setdefault(sid, {})
+    if len(seen) > 5000:
+        seen.clear()
+    return seen
+
+
+def forget_session(session_id: str) -> None:
+    _seen_by_session.pop(session_id, None)
+
+
+def _fame(r: dict) -> dict:
+    return FOOD_FAME.get(r.get("FameID") or r.get("RestaurantID"), {})
+
+
+def _asks_fine_dining(kw: str) -> bool:
+    return any(w in kw.lower() for w in FINE_DINING_WORDS)
+
+
+def _osm_places(county: str, kw: str, term: str, town: str | None = None) -> list[dict]:
+    """OSM places in a county (and district) matching the keyword by Chinese name, English name or cuisine."""
+    rows = OSM_BY_COUNTY.get(county, [])
+    if town:
+        rows = [r for r in rows if r["PostalAddress"].get("Town") == town]
+    if not kw:
+        return rows
+    cuisine, low = CUISINE_TAGS.get(kw.lower()), kw.lower()
+    return [r for r in rows if (term and term in r["RestaurantName"]) or (low in (r["NameEn"] or "").lower())
+            or (cuisine and cuisine in r["Cuisine"].split(";"))]
+
+
+def _km(a: dict, b: dict) -> float:
+    if not (a.get("PositionLat") and b.get("PositionLat")):
+        return float("inf")
+    dy = (a["PositionLat"] - b["PositionLat"]) * 111.0
+    dx = (a["PositionLon"] - b["PositionLon"]) * 111.0 * math.cos(math.radians(a["PositionLat"]))
+    return math.hypot(dx, dy)
+
+
+def _merge(official: list[dict], osm: list[dict]) -> list[dict]:
+    """Official rows first. An OSM place matching an official one (name in order, within DUPLICATE_KM) is
+    dropped, and lends the official row its English name, award scores and opening hours."""
+    def same_name(a: dict, b: dict) -> bool:
+        x, y = attractions._clean(a["RestaurantName"]), attractions._clean(b["RestaurantName"])
+        return attractions._in_order(x, y) or attractions._in_order(y, x)
+    out = list(official)
+    for o in osm:
+        twin = next((r for r in official if _km(r, o) <= DUPLICATE_KM and same_name(o, r)), None)
+        if twin is None:
+            out.append(o)
+            continue
+        twin.setdefault("NameEn", o["NameEn"])
+        twin.setdefault("FameID", o["RestaurantID"])
+        if not (twin.get("ServiceTimeInfo") or "").strip():
+            twin["ServiceTimeInfo"] = o["ServiceTimeInfo"]
+    return out
+
+
+def _address(addr: dict) -> str:
+    """City, district and street; a full address (OSM addr:full, Michelin's English one) stands alone,
+    without a leading postal code ('540南投縣...') and with 臺 for 台."""
+    street = re.sub(r"^\d{3,6}", "", (addr.get("StreetAddress") or "").strip()).replace("台", "臺")
+    if street and (street.startswith(addr.get("City") or "-") or street.isascii()):
+        return street
+    town = addr.get("Town") or ""
+    return f"{addr.get('City') or ''}{'' if street.startswith(town) else town}{street}"
+
+
+def _summarize(r: dict, name_key: str, pin: bool = False) -> dict:
+    """A result for the model. Only pins carry lat/lon: the frontend pins anything that has them, and the
+    map should show the places the answer recommends, not every candidate."""
     phones = [t["Tel"] for t in r.get("Telephones") or [] if t.get("Tel")]
     desc = (r.get("Description") or "").strip()
-    return {
+    out = {
         "name": r.get(name_key),
         "description": desc[:160] + ("…" if len(desc) > 160 else ""),
-        "address": f"{addr.get('City', '')}{addr.get('Town', '')}{addr.get('StreetAddress', '')}",
+        "address": _address(r.get("PostalAddress") or {}),
         "open_time": r.get("ServiceTimeInfo") or None,
         "phone": phones[0] if phones else None,
-        "lat": r.get("PositionLat"),
-        "lon": r.get("PositionLon"),
     }
+    lat, lon = r.get("PositionLat"), r.get("PositionLon")
+    if pin:
+        out.update(lat=lat, lon=lon)
+    fame = _fame(r)
+    if fame.get("name_en") or r.get("NameEn"):
+        out["name_en"] = fame.get("name_en") or r["NameEn"]
+    if fame.get("awards"):
+        out["awards"] = fame["awards"]
+    if fame.get("known_for"):  # well known without an award (reviewed list)
+        out["known_for"] = fame["known_for"]
+    if lat and lon:  # for places with no street address
+        out["map_url"] = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+    if fame.get("price"):  # Michelin's band: $ under NT$400 a person ... $$$$ over NT$2,000
+        out["price"] = fame["price"]
+    if r.get("Source") == "OpenStreetMap":
+        out["note"] = OSM_NOTE
+    elif r.get("Source") == "Michelin Guide":
+        out["note"] = MICHELIN_NOTE
+    return out
 
 
 def _dedupe(items: list[dict]) -> list[dict]:
@@ -60,14 +213,114 @@ def _dedupe(items: list[dict]) -> list[dict]:
     return out
 
 
+def _rank(rows: list[dict], term: str, style: str) -> list[dict]:
+    """Best first: the keyword in the name, then fame ('must_see') or local score ('local'), then listings
+    with a description. Ties keep the official-then-OSM order."""
+    key = "local" if style == "local" else "fame"
+    def score(r: dict) -> tuple:
+        named = bool(term) and term in (r.get("RestaurantName") or "")
+        return named, _fame(r).get(key, 0.0), len(r.get("Description") or "") >= 40
+    return sorted(rows, key=score, reverse=True)
+
+
+def _one_per_name(rows: list[dict]) -> list[dict]:
+    """The best-ranked branch of each name: six 鼎泰豐 would fill the list."""
+    seen, out = set(), []
+    for r in rows:
+        key = re.sub(r"[\W_]", "", attractions._clean(r.get("RestaurantName") or "")).lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+def _few_fine_dining(rows: list[dict], limit: int, kw: str) -> list[dict]:
+    if _asks_fine_dining(kw):
+        return rows
+    return attractions.cap_share(rows, limit, lambda r: _fame(r).get("fine_dining", False))
+
+
+def _local_gems(ranked: list[dict], picked: list[dict], limit: int, kw: str, n: int = LOCAL_GEMS) -> list[dict]:
+    """The best local scores not already picked, keeping fine dining within a third of the final list."""
+    gems = sorted((r for r in ranked if r not in picked and _fame(r).get("local", 0.0) >= LOCAL_GEM_MIN),
+                  key=lambda r: _fame(r)["local"], reverse=True)
+    if _asks_fine_dining(kw):
+        return gems[:n]
+    room = max(1, limit // 3) - sum(_fame(r).get("fine_dining", False) for r in picked[:limit - n])
+    out = []
+    for r in gems:
+        if _fame(r).get("fine_dining"):
+            if room <= 0:
+                continue
+            room -= 1
+        out.append(r)
+    return out[:n]
+
+
+def _more_candidates(ranked: list[dict], picked: list[dict]) -> list[str]:
+    """The next MORE_CANDIDATES award winners or well-known places, by name, for the model to look up with
+    `names`. Not every match as in find_attractions: Taipei has 14,000 places, mostly unknown to the model,
+    and listing them all made no difference to its picks."""
+    def label(r: dict) -> str:
+        notes = _fame(r).get("awards") or ["well known: " + _fame(r)["known_for"]]
+        return f"{r['RestaurantName']} ({'; '.join(notes)})"
+    return [label(r) for r in ranked if r not in picked and (_fame(r).get("awards") or _fame(r).get("known_for"))
+            ][:MORE_CANDIDATES]
+
+
+def _details(county: str, names: list[str]) -> str:
+    """Restaurants the model names, matched loosely against the county's places (阿宗麵線 finds 阿宗麵線西門店),
+    best known first."""
+    rows = [dict(r) for r in tourism_data.listings("restaurants", county) or []
+            if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
+    rows = [r for r in _merge(rows, OSM_BY_COUNTY.get(county, [])) if not _fame(r).get("closed")]
+    found, not_found = [], []
+    for name in names[:10]:
+        hits = attractions._name_matches(name, rows, "RestaurantName")[:20]
+        hits = sorted(hits, key=lambda r: _fame(r).get("fame", 0.0), reverse=True)[:attractions.MAX_NAME_MATCHES]
+        if hits:
+            found += hits
+        else:
+            not_found.append(name)
+    _remember(found, "RestaurantName")
+    source = tourism_data.SOURCE + ", plus " + OSM_SOURCE
+    if any(_fame(r) for r in found):
+        source += ", ranked with " + AWARD_SOURCE
+    return json.dumps({
+        "city": county,
+        "results": _dedupe([_summarize(r, "RestaurantName") for r in found]),
+        "not_found": not_found,
+        "note": "Recommend only places in results. A name in not_found is not in the sources: leave it out.",
+        "source": source,
+    }, ensure_ascii=False)
+
+
+def _remember(rows: list[dict], name_key: str) -> None:
+    """Keep the places shown to the model (results and more_candidates) for pins_from_answer."""
+    _seen().update({r[name_key]: dict(r, _name_key=name_key) for r in rows if r.get(name_key)})
+
+
+def pins_from_answer(answer: str) -> list[dict]:
+    """Map pins for the places the final answer names: this session's shown places whose Chinese name
+    appears in the text, longest names first (each match is blanked out, so 鼎泰豐 does not also match
+    inside 鼎泰豐信義店), in the order the answer mentions them."""
+    seen = _seen()
+    found = []
+    for name in sorted(seen, key=len, reverse=True):
+        at = answer.find(name)
+        if len(name) >= 2 and at >= 0:
+            answer = answer.replace(name, "\0" * len(name))
+            found.append((at, seen[name]))
+    return [_summarize(r, r["_name_key"], pin=True) for _, r in sorted(found, key=lambda x: x[0])]
+
+
 def _night_markets(county: str, town: str | None, limit: int) -> str:
-    filters = [f"PostalAddress/City eq '{county}'", "contains(AttractionName,'夜市')"]
-    if town:
-        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
-    rows = tdx_get(ATTRACTION_PATH, {"$filter": " and ".join(filters), "$top": limit * 2})
+    rows, source = attractions.search_rows(county, town, ("夜市",), name_only=True)
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
+    rows = [r for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
     markets = _dedupe([_summarize(r, "AttractionName") for r in rows])[:limit]
+    _remember(rows, "AttractionName")
     local = LOCAL_NIGHT_MARKETS.get(county, [])
     if not markets and not local:
         return json.dumps({
@@ -82,38 +335,62 @@ def _night_markets(county: str, town: str | None, limit: int) -> str:
         "results": markets,
         "local_tips": local,
         "note": "Most night markets open around 17:00-24:00. Rotating markets only open on the listed days.",
-        "source": "Taiwan Tourism Administration via TDX" + (", plus local knowledge" if local else ""),
+        "source": source + (", plus local knowledge" if local else ""),
     }, ensure_ascii=False)
 
 
-def find_local_food(city: str, keyword: str | None = None, district: str | None = None, limit: int = 5) -> str:
+def find_local_food(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
+                    style: str = "must_see", names: list[str] | None = None) -> str:
     place = resolve_city(city)
     if place is None:
-        return json.dumps({
-            "error": f"Unknown city '{city}'.",
-            "hint": "Use a Taiwan city or county name.",
-            "valid_cities": city_choices(),
-        })
+        return attractions.unknown_city(city)
     county, town = place
+    if names:
+        return _details(county, names)
     town = district or town
     limit = max(1, min(int(limit), 10))
+    if style not in STYLES:
+        return attractions.unknown_style(style, "places locals rate that few visitors know")
 
     kw = (keyword or "").strip()
     if kw.lower() in NIGHT_MARKET_WORDS:
         return _night_markets(county, town, limit)
 
-    term = KEYWORDS_ZH.get(kw.lower(), kw)
-    filters = [f"PostalAddress/City eq '{county}'"]
-    if town:
-        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
-    if term:
-        q = odata_quote(term)
-        filters.append(f"(contains(RestaurantName,'{q}') or contains(Description,'{q}'))")
-    rows = tdx_get(RESTAURANT_PATH, {"$filter": " and ".join(filters), "$top": limit * 3})
+    fine = _asks_fine_dining(kw)
+    term = "" if fine else KEYWORDS_ZH.get(kw.lower(), kw)  # fine dining is a kind of place, not a word in names
+    rows = tourism_data.listings("restaurants", county, town, (term,) if term else ())
+    source = tourism_data.SOURCE
+    if rows is None:  # the daily file is not loaded: ask TDX
+        filters = [f"PostalAddress/City eq '{county}'"]
+        if town:
+            filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
+        if term:
+            q = odata_quote(term)
+            filters.append(f"(contains(RestaurantName,'{q}') or contains(Description,'{q}'))")
+        rows = tdx_get(RESTAURANT_PATH, {"$filter": " and ".join(filters), "$top": limit * 3})
+        source = "Taiwan Tourism Administration via TDX"
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
+    rows = [dict(r) for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]
+    osm = _osm_places(county, "" if fine else kw, term, town)
+    if osm:
+        rows = _merge(rows, osm)
+        if any(r.get("Source") == "OpenStreetMap" for r in rows):
+            source += ", plus " + OSM_SOURCE
+    rows = [r for r in rows if not _fame(r).get("closed")]
 
-    results = _dedupe([_summarize(r, "RestaurantName") for r in rows])[:limit]
+    ranked = _few_fine_dining(_one_per_name(_rank(rows, term, style)), limit, kw)
+    if fine:
+        ranked.sort(key=lambda r: _fame(r).get("fine_dining", False), reverse=True)
+    picked = ranked[:limit]
+    gems = _local_gems(ranked, picked, limit, kw) if style == "must_see" and limit >= 5 else []
+    picked = picked[:limit - len(gems)] + gems
+    _remember(picked + [r for r in ranked if r not in picked and (_fame(r).get("awards") or _fame(r).get("known_for"))
+                        ][:MORE_CANDIDATES], "RestaurantName")
+    results = _dedupe([dict(_summarize(r, "RestaurantName"), **({"local_gem": True} if r in gems else {}))
+                       for r in picked])
+    if any(_fame(r) for r in picked):
+        source += ", ranked with " + AWARD_SOURCE
     if not results:
         hint = "No listed restaurants match. "
         if term and term.isascii():
@@ -128,11 +405,14 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
     return json.dumps({
         "city": county,
         "keyword": kw or None,
+        "style": style,
         "searched_as": term if term != kw else None,
         "results": results,
+        "more_candidates": _more_candidates(ranked, picked),
         "note": "Names and descriptions are in Chinese: translate them for the user and keep the "
-                "Chinese name so they can show it to a taxi driver.",
-        "source": "Taiwan Tourism Administration via TDX",
+                "Chinese name so they can show it to a taxi driver. Mention awards only as listed in "
+                "`awards`.",
+        "source": source,
     }, ensure_ascii=False)
 
 
@@ -142,8 +422,10 @@ SCHEMA = {
         "name": "find_local_food",
         "description": (
             "Find restaurants, local specialties, or night markets in a Taiwan city from the Tourism "
-            "Administration's listings. Use when the user asks where or what to eat. Returns name "
-            "(Chinese), short description, address, opening hours, phone, and coordinates. For night "
+            "Administration's listings and OpenStreetMap, best known first (Michelin Guide, 500盤 and 500碗 "
+            "awards). Use when the user asks where or what to eat. Returns name (Chinese), awards, short "
+            "description, address, opening hours, phone, and coordinates, plus `more_candidates`: other "
+            "award winners by name. For night "
             "markets, pass keyword 'night market' to also get which days rotating markets open."
         ),
         "parameters": {
@@ -163,7 +445,19 @@ SCHEMA = {
                     "type": "string",
                     "description": "Optional district in Traditional Chinese to narrow the area, e.g. '中西區', '大安區'.",
                 },
-                "limit": {"type": "integer", "description": "How many places (1-10, default 5)."},
+                "limit": {"type": "integer", "description": "How many places (1-10, default 10)."},
+                "names": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Chinese names of specific restaurants to look up (from more_candidates, or a "
+                                   "well-known place the results lack). Keep `city`. Returns their details, and "
+                                   "not_found for names the sources lack.",
+                },
+                "style": {
+                    "type": "string", "enum": list(STYLES),
+                    "description": "'must_see' (default): the best-known places. 'local': places local food "
+                                   "critics rate that foreign guidebooks miss, when the user asks where locals "
+                                   "eat or for hidden gems.",
+                },
             },
             "required": ["city"],
         },

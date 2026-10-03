@@ -123,11 +123,7 @@ def _typhoon_alert(county: str, now: dt.datetime) -> str | None:
 
 def _indoor_spots(county: str, limit: int = 3) -> list[dict]:
     """Up to `limit` indoor places with coordinates, so the frontend pins them as backups."""
-    match = " or ".join(
-        f"contains(AttractionName,'{w}') or contains(Description,'{w}')" for w in INDOOR_WORDS
-    )
-    rows = attractions.tdx_get(attractions.ATTRACTION_PATH, {
-        "$filter": f"PostalAddress/City eq '{county}' and ({match})", "$top": attractions.RANK_POOL})
+    rows, _ = attractions.search_rows(county, words=INDOOR_WORDS)
     if isinstance(rows, dict):
         return []
     rows = [r for r in rows if r.get("ServiceStatus") not in attractions.CLOSED_STATUS]

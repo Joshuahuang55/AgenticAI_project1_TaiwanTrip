@@ -242,8 +242,10 @@ function showWeather(data) {
 
 function updateBoard(calls, mapPins = []) {
     const newPins = [];
-    // Sights the answer recommends arrive in map_pins, not as a tool call.
-    if (mapPins.length) newPins.push(...addPins({ name: "find_attractions" }, { results: mapPins }));
+    // Sights and restaurants the answer recommends arrive in map_pins, not as a tool call.
+    for (const kind of new Set(mapPins.map((p) => p.kind || "find_attractions"))) {
+        newPins.push(...addPins({ name: kind }, { results: mapPins.filter((p) => (p.kind || "find_attractions") === kind) }));
+    }
     for (const call of calls) {
         const data = parse(call.result);
         if (!data || data.error) continue;
