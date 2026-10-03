@@ -6,6 +6,7 @@ result, and the run continues. Unverified links are not worth losing an answer o
 `redact_links` strips them after the run instead of tripping a wire.
 """
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field, replace
@@ -24,6 +25,8 @@ from agents import (
     tool_input_guardrail,
     tool_output_guardrail,
 )
+
+from trip_context import TripContext, extract_trip_context
 
 MAX_MESSAGE_CHARS = 2000
 MAX_TOOL_ARG_CHARS = 200
@@ -48,6 +51,8 @@ class ChatState:
     tool_calls: list[dict] = field(default_factory=list)
     user_texts: list[str] = field(default_factory=list)
     turn_start: int = 0  # index in tool_calls where the current turn begins
+    trip: TripContext = field(default_factory=TripContext)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
     def sources(self) -> str:
         """Text an answer may cite: tool results the model was shown, and what the user typed."""
@@ -131,6 +136,11 @@ async def check_input(ctx: RunContextWrapper[ChatState], agent: Agent, items) ->
         return GuardrailFunctionOutput(output_info={"reason": "too_long"}, tripwire_triggered=True)
     verdict = await classify(text, _latest_assistant_text(items), agent.model, agent.model_settings)
     reason = {"HARMFUL": "harmful", "INJECTION": "injection", "OFF_TOPIC": "off_topic"}.get(verdict)
+    if reason is None:
+        # This guardrail blocks: extract only allowed input, before dynamic instructions run.
+        ctx.context.trip = await extract_trip_context(
+            ctx.context.trip, text, _latest_assistant_text(items), agent.model, agent.model_settings
+        )
     return GuardrailFunctionOutput(output_info={"reason": reason, "verdict": verdict},
                                    tripwire_triggered=reason is not None)
 

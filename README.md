@@ -23,6 +23,48 @@ and a trip board (map, stay check, budget) is drawn from the tool results.
 
 Follow-up to test memory: after query 2, ask `Is the second one you listed registered? Double check it.`
 
+## Conversation behavior
+
+Broad recommendation requests get a small initial selection from tool results, with areas and
+brief reasons, followed by at most one optional question to refine the next answer. The agent
+reuses details from the same conversation and respects corrections or requests to skip questions.
+It asks first when required lookup information is missing, such as the date for train schedules.
+District filtering narrows an area; it does not confirm walking distance or travel time.
+
+### Trip context within a session
+
+Each session saves the user's city, area, travel dates, departure point, budget, interests,
+dietary needs, and follow-up question preference separately from the last 20 user turns.
+`trip_context.py` extracts changes using a typed SDK output and `prompts/trip_context.txt`;
+each saved value includes an exact supporting quote from the current user message. Missing
+details, explicit "no preference", and withdrawn details are distinct. Latest corrections
+replace old values; changing city clears the old area, while unrelated preferences remain.
+Budget values retain the stated currency and scope; extraction does not convert prices.
+
+The blocking input guardrail screens the message before extraction, then the main agent's
+dynamic instructions include the updated context. This adds one model call per accepted
+message, with a 10-second extraction timeout. Invalid output or extraction failure retains
+the previous context and lets the conversation continue. Failed/rejected main runs roll back
+preference changes. Evidence checks validate provenance and format; semantic extraction still
+depends on the model. Requests within one session run in order to avoid overlapping updates.
+
+Context is isolated by `session_id`, survives history trimming, and is removed by **New trip**,
+session eviction, or server restart. It is not a permanent user profile.
+
+After changing either file in `prompts/`, restart the app and check these conversations:
+
+- `Give me some food recommendations in Taipei.` → recommendations first, then an optional refinement.
+  Follow with `Around Ximen, and vegetarian.` → uses Taipei and the new preferences; does not ask for the city again.
+- In a new trip, `Recommend sights in Taipei. Just give me three options, no questions.`
+  → three tool-backed suggestions without a refinement question.
+- In a new trip, `Find a train from Taipei to Tainan.` → asks for the travel date before a timetable lookup.
+- After the Taipei/Ximen food conversation, `Actually, Tainan. Keep it vegetarian, no questions.`
+  → uses Tainan, drops Ximen, retains vegetarian, and skips optional refinement questions.
+  Click **New trip**, then ask for food without a city → asks for a city rather than reusing Tainan.
+
+Inspect the displayed tool calls as well as the answer. Scripted-model tests cover the harness;
+they do not establish whether Gemini follows this policy.
+
 ## Tools
 
 | Tool | What it does | Data source |
@@ -89,8 +131,10 @@ Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID`, `TDX_CLIENT_S
 
 ```
 app.py              routes, session store, Agents SDK agent and tools, sight pins
+trip_context.py     validated user preference updates, separate from bounded chat history
 guardrails.py       input, output, and tool guardrails
 prompts/system.txt  system prompt (with {today} filled in on each turn)
+prompts/trip_context.txt  rules for extracting user-stated trip preferences
 tools/__init__.py   tool registry (TOOLS + run_tool)
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/tourism_data.py daily open-data files for attractions and restaurants, searched in memory

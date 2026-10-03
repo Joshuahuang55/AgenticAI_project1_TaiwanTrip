@@ -10,6 +10,7 @@ from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessa
 
 import app
 import guardrails
+import trip_context
 
 
 def _text(text):
@@ -24,14 +25,21 @@ def _call(name, arguments, call_id="c0"):
 class ScriptedModel(Model):
     """Answers the scope checker with `verdict` and the main agent with the scripted turns, in order."""
 
-    def __init__(self, turns, verdict="ALLOW"):
+    def __init__(self, turns, verdict="ALLOW", context_updates=()):
         self.turns, self.verdict, self.main_inputs = list(turns), verdict, []
+        self.context_updates = list(context_updates)
+        self.context_inputs, self.main_instructions = [], []
 
     async def get_response(self, system_instructions, input, *args, **kwargs):
         if system_instructions == guardrails.SCOPE_CHECKER.instructions:
             output = [_text(self.verdict)]
+        elif system_instructions == trip_context.EXTRACTOR_PROMPT:
+            self.context_inputs.append(json.loads(input[0]["content"]))
+            updates = self.context_updates.pop(0) if self.context_updates else []
+            output = [_text(json.dumps({"updates": updates}))]
         else:
             self.main_inputs.append(input)
+            self.main_instructions.append(system_instructions)
             output = self.turns.pop(0)
         return ModelResponse(output=output, usage=Usage(), response_id=None)
 
@@ -41,8 +49,8 @@ class ScriptedModel(Model):
 
 @pytest.fixture
 def model(monkeypatch):
-    def use(turns, verdict="ALLOW"):
-        fake = ScriptedModel(turns, verdict)
+    def use(turns, verdict="ALLOW", context_updates=()):
+        fake = ScriptedModel(turns, verdict, context_updates)
         monkeypatch.setattr(app, "AGENT", app.AGENT.clone(model=fake))
         return fake
     monkeypatch.setattr(app, "sessions", app.OrderedDict())
@@ -87,6 +95,7 @@ def test_input_guardrail_rejects_before_the_main_agent(model, verdict, reason):
     assert fake.main_inputs == [] and out.tool_calls == []
     # The rejected message stays out of the history.
     assert app.sessions[out.session_id].history == []
+    assert fake.context_inputs == [] and app.sessions[out.session_id].trip.as_dict() == {}
 
 
 def test_input_guardrail_rejects_long_messages_without_a_model_call(model):

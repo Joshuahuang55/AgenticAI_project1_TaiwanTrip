@@ -592,8 +592,9 @@ SCHEMA = {
                 },
                 "district": {
                     "type": "string",
-                    "description": "Only if the user names a district: the district in Traditional Chinese, "
-                                   "e.g. '中西區', '大安區'. Otherwise omit.",
+                    "description": "Optional district in Traditional Chinese, e.g. '中西區', '大安區', "
+                                   "from the user's request or established conversation context. "
+                                   "Omit for a broad city search when no area is known.",
                 },
                 "limit": {"type": "integer", "description": "How many candidates (1-10, default 10)."},
                 "style": {
