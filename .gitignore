@@ -13,3 +13,6 @@ __pycache__/
 
 # Course handouts
 *.pdf
+
+# Daily open-data files saved by tools/tourism_data.py
+data/daily/
