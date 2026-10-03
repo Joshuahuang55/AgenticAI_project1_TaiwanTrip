@@ -34,11 +34,11 @@ District filtering narrows an area; it does not confirm walking distance or trav
 ### Trip context within a session
 
 Each session saves the user's city, area, travel dates, departure point, budget, interests,
-dietary needs, and follow-up question preference separately from the last 20 user turns.
+dietary needs, outing duration/setting, and question preference separately from the last 20 user turns.
 `trip_context.py` extracts changes using a typed SDK output and `prompts/trip_context.txt`;
 each saved value includes an exact supporting quote from the current user message. Missing
 details, explicit "no preference", and withdrawn details are distinct. Latest corrections
-replace old values; changing city clears the old area, while unrelated preferences remain.
+replace old values; changing city clears the old area and outing duration, while unrelated preferences remain.
 Budget values retain the stated currency and scope; extraction does not convert prices.
 
 The blocking input guardrail screens the message before extraction, then the main agent's
@@ -74,7 +74,7 @@ they do not establish whether Gemini follows this policy.
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
-| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names. Name lookups tolerate different wording (士林夜市 finds 士林觀光夜市) and report closed places. Ranked by fame; `style: local` for places locals like, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
+| `find_attractions` | Sights by city, keyword, district, interests, indoor/outdoor preference, and available time. Python returns a ranked pick, alternatives, estimated visit durations, nearby groups, and a suggested outing. Name lookups tolerate different wording and report closed places. `style: local` favors local appeal; broad default searches also include local gems. Only places named in the answer are pinned | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
 | `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
@@ -86,7 +86,7 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 | Tool | Facts the agent can compare | Missing information / limits |
 |---|---|---|
 | Food | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated |
-| Attractions | Categories, description, address, listed hours and admission information | Many hours/fees are missing; no measured visit duration or walking time |
+| Attractions | Categories, listed details, interest/setting fit, estimated visit duration, ranked comparison and nearby outing | Planning heuristics are estimates; coordinate distances are not walking routes; hours/fees can be missing |
 | Lodging | Registration, license, address, certification, owner-reported price range | Registration is not a quality rating; no live rooms or booking prices |
 | Rail | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
 | Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
@@ -96,8 +96,30 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
 as **unavailable**. Source claims are **reported**, not independently verified. Compare only
 available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
-Food and rail now include explicit comparison fields; the other tools retain their existing
+Food, attractions, and rail now include explicit comparison fields; the other tools retain their existing
 domain outputs. Existing `/chat` fields and map behavior are preserved.
+
+### Attraction preference comparisons
+
+Pass `interests` (history, art, nature, hiking, shopping, culture, museums, temples), `setting`
+(`indoor`, `outdoor`, or `any`), and `available_minutes` (15–720) when the user supplies them.
+The time budget is for the entire outing, excluding travel to/from the area. Keep these criteria
+on `names` detail lookups. Preferences rank before fame/local scores; they do not exclude every
+unknown or partial match. Broad searches retain existing fame, variety, and local-gem behavior.
+
+Each result includes `planning` and `preference_match`; `comparison` provides the recommended
+name, reasons, alternatives, and nearby groups. Visit-duration ranges and indoor/outdoor labels
+are category/name estimates, separate from reported hours and admission prices. Nearby groups
+require every pair to be within 2 km in a straight line. A time-budgeted `suggested_visit` gives
+an ordered `timeline` of up to three visits, estimated city transfers (20–60 minutes), and a
+30-minute break for outings of at least four hours with multiple stops. Transfers may connect
+places beyond the nearby-group radius; unknown coordinates use a 45-minute allowance without
+claiming proximity. Half-day visits can expand within their estimated duration ranges; the tool
+reports planned and remaining minutes rather than adding unrelated stops to fill the budget.
+Time and setting preferences persist within the session; the attraction wrapper restores them
+when omitted on follow-ups. A destination change clears the old outing's time budget.
+It is a planning suggestion, not a checked walking route or date-specific opening-hours itinerary.
+Missing hours/prices still allow useful recommendations. No additional API or dataset rebuild is needed.
 
 ### Food preference comparisons
 

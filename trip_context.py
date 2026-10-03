@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("taiwan_trip")
 TripField = Literal["city", "area", "start_date", "end_date", "departure_point", "budget",
-                    "interests", "dietary_needs", "follow_up_questions"]
+                    "interests", "dietary_needs", "follow_up_questions", "available_minutes", "setting"]
 
 
 class PreferenceUpdate(BaseModel):
@@ -25,7 +25,7 @@ class PreferenceUpdate(BaseModel):
 
 
 class TripUpdates(BaseModel):
-    updates: list[PreferenceUpdate] = Field(default_factory=list, max_length=9)
+    updates: list[PreferenceUpdate] = Field(default_factory=list, max_length=11)
 
 
 @dataclass(frozen=True)
@@ -61,8 +61,14 @@ class TripContext:
                         continue
                 if update.field == "follow_up_questions" and value not in ("allowed", "avoid"):
                     continue
+                if update.field == "setting" and value not in ("indoor", "outdoor", "any"):
+                    continue
+                if update.field == "available_minutes":
+                    if not value.isascii() or not value.isdecimal() or not 15 <= int(value) <= 720:
+                        continue
+                    value = str(int(value))
             elif update.operation == "no_preference" and update.field not in (
-                "city", "area", "departure_point", "budget", "interests", "dietary_needs"
+                "city", "area", "departure_point", "budget", "interests", "dietary_needs", "setting", "available_minutes"
             ):
                 continue
             accepted[update.field] = Preference(
@@ -78,6 +84,7 @@ class TripContext:
             new_city = accepted["city"]
             if old_city is None or (old_city.value, old_city.status) != (new_city.value, new_city.status):
                 preferences.pop("area", None)
+                preferences.pop("available_minutes", None)  # The old outing budget belongs to its destination.
         preferences.update(accepted)
         start, end = preferences.get("start_date"), preferences.get("end_date")
         if start and end and start.value and end.value and start.value > end.value:

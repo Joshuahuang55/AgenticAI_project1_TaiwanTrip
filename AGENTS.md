@@ -29,6 +29,8 @@ Food comparisons in `tools/food_preferences.py` prioritize dietary reports and i
 
 Rail ranks the whole matching timetable before limiting options. Default to earliest arrival; reserve earliest departure for an explicit user priority. Keep computed trade-offs, overnight dates, and schedules when fares fail. `arrive_by` is on the departure date; missing fares never count as free. Test with mocked responses in `tests/test_transport.py`.
 
+Attraction preferences in `tools/attraction_preferences.py` rank before fame/local scores and survive name lookups. Settings and visit durations are category estimates, separate from listed hours/prices. Nearby groups use coordinates, never district names alone; straight-line distances are not walking routes. Time-budgeted outings return an ordered timeline with estimated city transfers, breaks, and remaining time; keep alternatives separate from stops. Save outing time/setting in session preferences and restore omitted attraction arguments. Indoor nature means relevant exhibits, not nearby gardens; mixed art venues remain useful when their outdoor portions are optional. Preserve exact-name map pins and broad-search diversity.
+
 ## Testing Guidelines
 
 Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for competing/unknown food facts, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists.

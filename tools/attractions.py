@@ -6,7 +6,7 @@ import re
 from contextvars import ContextVar
 from pathlib import Path
 
-from tools import tourism_data
+from tools import attraction_preferences, tourism_data
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
 ATTRACTION_PATH = "tourism/service/odata/V2/Tourism/Attraction"
@@ -363,7 +363,7 @@ def _name_matches(name: str, rows: list[dict], field: str = "AttractionName") ->
     return sorted(out, key=lambda r: abs(len(_clean(r[field])) - len(q)))
 
 
-def _details(county: str, names: list[str]) -> str:
+def _details(county: str, names: list[str], interests=(), setting="any", available_minutes=None) -> str:
     """Full listings for places the model picked by name, matched against the city's listings.
 
     Names need not be exact: 士林夜市 finds 士林觀光夜市. When a name fits several listings, all of them
@@ -407,6 +407,7 @@ def _details(county: str, names: list[str]) -> str:
     picked = []
     for hits in found.values():
         picked += [r for r in hits if r not in picked]
+    picked = attraction_preferences.rank(picked, interests, setting, available_minutes)
     # Remember them like search results, so the answer's picks get map pins.
     _seen().update({r["AttractionName"]: r for r in picked if r.get("AttractionName")})
     hours = _lookup(SERVICE_TIME_PATH, "ServiceTimes")
@@ -415,7 +416,10 @@ def _details(county: str, names: list[str]) -> str:
                 if hits and [r["AttractionName"] for r in hits] != [n]}
     out = {
         "city": county,
-        "results": [_summarize(r, hours, fees) for r in picked],
+        "results": [_planning_summary(r, hours, fees, interests, setting, available_minutes, pin=True)
+                    for r in picked],
+        "preferences": {"interests": list(interests), "setting": setting, "available_minutes": available_minutes},
+        "comparison": attraction_preferences.compare(picked, interests, setting, available_minutes),
         "not_found": [n for n, hits in found.items() if not hits and n not in closed],
         "source": (TDX_SOURCE if city_rows is None else tourism_data.SOURCE)
                   + (f", plus {EXTRA_SOURCE}" if any(r.get("Source") == EXTRA_SOURCE for r in picked) else ""),
@@ -497,18 +501,31 @@ def unknown_style(style: str, local: str) -> str:
     return json.dumps({"error": f"Unknown style '{style}'.", "hint": f"Use 'must_see' (default) or 'local' ({local})."})
 
 
+def _planning_summary(row, hours, fees, interests, setting, available_minutes, pin=False):
+    return dict(_summarize(row, hours, fees, pin=pin), planning=attraction_preferences.profile(row),
+                preference_match=attraction_preferences.fit(row, interests, setting, available_minutes))
+
+
 def find_attractions(city: str, keyword: str | None = None, district: str | None = None, limit: int = 10,
-                     names: list[str] | None = None, style: str = "must_see") -> str:
+                     names: list[str] | None = None, style: str = "must_see",
+                     interests: list[str] | None = None, setting: str = "any",
+                     available_minutes: int | None = None) -> str:
+    interests = [] if interests is None else interests
+    try:
+        attraction_preferences.validate(interests, setting, available_minutes)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc), "hint": "Correct the attraction preferences and retry."})
+    interests = list(dict.fromkeys(interests))
     place = resolve_city(city)
     if place is None:
         return unknown_city(city)
     county, town = place
-    if names:
-        return _details(county, names)
-    town = district or town
-    limit = max(1, min(int(limit), 10))
     if style not in STYLES:
         return unknown_style(style, "places locals like that few visitors know")
+    if names:
+        return _details(county, names, interests, setting, available_minutes)
+    town = district or town
+    limit = max(1, min(int(limit), 10))
 
     kw = (keyword or "").strip()
     nature = kw.lower() in NATURE_KEYWORDS
@@ -525,12 +542,14 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         seen.clear()
     seen.update({r["AttractionName"]: r for r in rows if r.get("AttractionName")})
     ranked = _dedupe(_rank(rows, words, style))
-    if style == "local":
+    has_preferences = bool(interests or setting != "any" or available_minutes is not None)
+    ranked = attraction_preferences.rank(ranked, interests, setting, available_minutes)
+    if style == "local" and not has_preferences:
         ranked = _few_temples(ranked, limit, words)
-    named = [r for r in ranked if not words or any(_has(r.get("AttractionName") or "", w) for w in words)]
+    named = [r for r in ranked if has_preferences or not words or any(_has(r.get("AttractionName") or "", w) for w in words)]
     rows = _spread(named, limit)
     rows += _spread([r for r in ranked if r not in named], limit - len(rows))
-    gems = _local_gems(ranked, rows, words) if style == "must_see" and limit >= 5 else []
+    gems = _local_gems(ranked, rows, words) if not has_preferences and style == "must_see" and limit >= 5 else []
     rows = rows[:limit - len(gems)] + gems
     if not rows:
         hint = "No listed attractions match. "
@@ -550,17 +569,18 @@ def find_attractions(city: str, keyword: str | None = None, district: str | None
         "city": county,
         "keyword": kw or None,
         "style": style,
+        "preferences": {"interests": interests, "setting": setting, "available_minutes": available_minutes},
+        "comparison": attraction_preferences.compare(rows, interests, setting, available_minutes),
         "searched_as": searched_as if searched_as != kw else None,
-        "results": [dict(_summarize(r, hours, fees, pin=False),
+        "results": [dict(_planning_summary(r, hours, fees, interests, setting, available_minutes),
                          **({"local_gem": True} if r in gems else {}),
                          **({"local_favorite": True} if style == "local" and _is_local_favorite(r) else {}))
                     for r in rows],
-        # Names only, by district: lets the model spot famous places the ID-ordered picks missed.
+        # Other listings remain available for a deliberate follow-up lookup.
         "more_candidates": _by_district([r for r in ranked if r not in rows]),
-        "note": "Names and descriptions are in Chinese: translate them and keep the Chinese name so the user can "
-                "show it to a taxi driver. open_time and ticket_info are the only source for hours and prices. "
-                "When one is null, say the official listing does not include it and suggest checking the "
-                "place's official site.",
+        "note": "Translate names and retain the exact Chinese name for map pins. Use comparison for your pick "
+                "and alternatives. Visit durations/settings are estimates; open_time and ticket_info are the "
+                "only source for hours and prices. Missing hours or fees do not prevent recommendations.",
         "source": source,
     }, ensure_ascii=False)
 
@@ -572,10 +592,9 @@ SCHEMA = {
         "description": (
             "Find sights to visit in a Taiwan city from the Tourism Administration's listings: temples, "
             "museums, hiking trails, old streets, parks, beaches, and more. Use when the user asks what to "
-            "see or do. Returns up to `limit` varied candidates (not ranked by popularity) with name "
-            "(Chinese), categories, short description, address, opening hours, ticket prices, phone, and "
-            "coordinates, plus `more_candidates`: names of other matching listings. Pick the best-known "
-            "and best-fitting ones for the user."
+            "see or do. Ranks by interests, setting, time budget, then popularity/local appeal. Returns "
+            "listed details, estimated visit durations, a recommended pick and alternatives, nearby groups, "
+            "and a suggested outing when time is given. more_candidates holds other names for follow-ups."
         ),
         "parameters": {
             "type": "object",
@@ -597,6 +616,13 @@ SCHEMA = {
                                    "Omit for a broad city search when no area is known.",
                 },
                 "limit": {"type": "integer", "description": "How many candidates (1-10, default 10)."},
+                "interests": {"type": "array", "items": {"type": "string", "enum": list(attraction_preferences.INTERESTS)},
+                              "description": "Interests stated by the user or saved in this session; omit for broad suggestions."},
+                "setting": {"type": "string", "enum": list(attraction_preferences.SETTINGS),
+                            "description": "Preferred indoor/outdoor setting (default any), e.g. indoor for a rainy-day request."},
+                "available_minutes": {"type": "integer", "minimum": 15, "maximum": 720,
+                                      "description": "Total time available for this outing, in minutes; excludes travel to/from the area. "
+                                                     "Use only a time budget given by the user."},
                 "style": {
                     "type": "string", "enum": list(STYLES),
                     "description": "'must_see' (default): the best-known sights. 'local': places locals know "
@@ -606,7 +632,7 @@ SCHEMA = {
                 "names": {
                     "type": "array", "items": {"type": "string"},
                     "description": "Only after a search: Chinese names from results or more_candidates "
-                                   "that you need details for (address, hours, fees). Keep `city`.",
+                                   "that you need details for (address, hours, fees). Keep city and all preferences.",
                 },
             },
             "required": ["city"],

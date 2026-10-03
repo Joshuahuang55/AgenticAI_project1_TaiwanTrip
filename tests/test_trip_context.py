@@ -10,7 +10,7 @@ import pytest
 import app
 import guardrails
 import trip_context as tc
-from test_app import _chat, _text, model  # reuse the SDK scripted-model fixture
+from test_app import _call, _chat, _text, model  # reuse the SDK scripted-model fixture
 
 
 def update(field, value=None, evidence=None, operation="set"):
@@ -57,6 +57,48 @@ def test_changes_need_evidence_in_the_current_user_message():
     context = apply(tc.TripContext(), "thanks", update("city", "Taipei"),
                         update("budget", "cheap", " "), update("dietary_needs", "vegan", "vegan"))
     assert context.as_dict() == {}
+
+
+def test_outing_time_survives_refinement_and_explicit_correction():
+    current = apply(tc.TripContext(), "5 hours in Taipei", update("city", "Taipei"),
+                    update("available_minutes", "300", "5 hours"))
+    refined = apply(current, "indoor art and nature", update("setting", "indoor"),
+                    update("interests", "art and nature"))
+    assert refined.preferences["available_minutes"].value == "300"
+    corrected = apply(refined, "Actually 2 hours", update("available_minutes", "120", "2 hours"))
+    assert corrected.preferences["available_minutes"].value == "120"
+    assert corrected.preferences["setting"].value == "indoor"
+    moved = apply(refined, "Tainan", update("city", "Tainan"))
+    assert "available_minutes" not in moved.preferences
+
+
+@pytest.mark.parametrize("field,value", [("available_minutes", "0"), ("available_minutes", "721"),
+                                         ("available_minutes", "5 hours"), ("available_minutes", "90.5"),
+                                         ("setting", "maybe indoors")])
+def test_outing_preferences_validate_before_saving(field, value):
+    assert apply(tc.TripContext(), value, update(field, value)).as_dict() == {}
+
+
+def test_tool_wrapper_restores_time_and_setting_on_preference_only_followup(model, monkeypatch):
+    monkeypatch.setattr(app, "MAX_USER_TURNS", 1)
+    received = []
+    def tool(name, args):
+        received.append(dict(args))
+        return json.dumps({"results": [], "preferences": args})
+    monkeypatch.setattr(app, "run_tool", tool)
+    fake = model([[_text("Initial suggestions.")], [_text("Hello.")],
+                  [_call("find_attractions", '{"city":"Taipei","interests":["art","nature"]}')],
+                  [_text("Here is your five-hour outing.")]], context_updates=[
+        [update("city", "Taipei"), update("available_minutes", "300", "5 hours")], [],
+        [update("setting", "indoor"), update("interests", "art and nature")],
+    ])
+    first = _chat("5 hours in Taipei")
+    _chat("Hello", first.session_id)
+    assert "5 hours" not in json.dumps(app.sessions[first.session_id].history)
+    refined = _chat("indoor art and nature", first.session_id)
+    assert received[0]["available_minutes"] == 300 and received[0]["setting"] == "indoor"
+    assert refined.tool_calls[0]["args"] == received[0]
+    assert '"available_minutes": {"value": "300"' in fake.main_instructions[-1]
 
 
 @pytest.mark.parametrize("value", ["2026-02-30", "2026-1-1", "next Friday", "20261008"])

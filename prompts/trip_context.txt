@@ -29,6 +29,11 @@ Fields:
   convert money, or copy prices suggested by the assistant.
 - interests: a concise summary of the user's stated interests. Add new interests to saved ones
   unless the user replaces/removes them. Preserve only previously stated and new interests.
+- available_minutes: total time for the current sightseeing outing, as an integer string in
+  minutes (15–720). "I have 5 hours" becomes "300". Preserve it when a follow-up only refines
+  preferences. Never copy suggested visit lengths, train durations, or hotel nights into this field.
+- setting: "indoor", "outdoor", or "any" for the user's sightseeing setting preference.
+  "I like indoor ones" sets indoor. This is a preference, not an interest or a confirmed property of a place.
 - dietary_needs: a concise summary of stated dietary restrictions or preferences. Add new
   needs to saved ones unless explicitly corrected/removed. Do not turn a cuisine request into
   an allergy, infer vegetarian from a meat-free dish, or infer medical needs.

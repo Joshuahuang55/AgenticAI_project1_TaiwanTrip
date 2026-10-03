@@ -79,6 +79,12 @@ def make_tool(schema: dict) -> FunctionTool:
             result = json.dumps({"error": "Arguments were not valid JSON.",
                                  "hint": "Call the tool again with a JSON object of arguments."})
         else:
+            if spec["name"] == "find_attractions" and isinstance(args, dict):
+                # A preference-only follow-up must keep its outing budget even if the model omits it.
+                for key in ("available_minutes", "setting"):
+                    pref = ctx.context.trip.preferences.get(key)
+                    if key not in args and pref and pref.status == "specified":
+                        args[key] = int(pref.value) if key == "available_minutes" else pref.value
             result = await asyncio.to_thread(run_tool, spec["name"], args)
         ctx.context.tool_calls.append({"id": ctx.tool_call_id, "name": spec["name"], "args": args, "result": result})
         return result
