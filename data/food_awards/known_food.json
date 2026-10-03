@@ -1,0 +1,501 @@
+{
+"generated": "2026-10-02",
+"method": "LLM (Gemini, Qwen) list of well-known food places per county, checked against OpenStreetMap and reviewed by a second model (Claude) for the project owner",
+"places": [
+{
+"county": "嘉義市",
+"name": "林聰明沙鍋魚頭",
+"known_for": "沙鍋魚頭"
+},
+{
+"county": "嘉義市",
+"name": "劉里長雞肉飯",
+"known_for": "雞肉片飯"
+},
+{
+"county": "嘉義市",
+"name": "源滷肉飯",
+"known_for": "魯熟肉"
+},
+{
+"county": "嘉義市",
+"name": "阿宏師火雞肉飯",
+"known_for": "火雞肉片飯"
+},
+{
+"county": "嘉義市",
+"name": "王家祖傳本產牛雜湯",
+"known_for": "牛雜湯"
+},
+{
+"county": "嘉義市",
+"name": "羅山生炒鱔魚麵",
+"known_for": "生炒鱔魚麵"
+},
+{
+"county": "嘉義縣",
+"name": "新港鴨肉羹",
+"known_for": "鴨肉羹"
+},
+{
+"county": "基隆市",
+"name": "基隆長腳麵食",
+"known_for": "豬腳麵"
+},
+{
+"county": "基隆市",
+"name": "周家蔥油餅",
+"known_for": "蔥油餅"
+},
+{
+"county": "基隆市",
+"name": "孝三大腸圈",
+"known_for": "大腸圈"
+},
+{
+"county": "基隆市",
+"name": "天天鮮排骨飯",
+"known_for": "排骨蝦仁飯"
+},
+{
+"county": "宜蘭縣",
+"name": "羅東林場肉羹",
+"known_for": "肉羹"
+},
+{
+"county": "宜蘭縣",
+"name": "阿灶伯當歸羊肉湯",
+"known_for": "羊肉湯"
+},
+{
+"county": "宜蘭縣",
+"name": "頭城阿宗芋冰城",
+"known_for": "芋頭叭噗"
+},
+{
+"county": "宜蘭縣",
+"name": "蒜味肉羹",
+"known_for": "蒜味肉羹"
+},
+{
+"county": "宜蘭縣",
+"name": "礁溪柯氏蔥油餅",
+"known_for": "蔥油餅"
+},
+{
+"county": "宜蘭縣",
+"name": "正好鮮肉小籠包",
+"known_for": "小籠包"
+},
+{
+"county": "宜蘭縣",
+"name": "義豐蔥油派",
+"known_for": "蔥油派"
+},
+{
+"county": "宜蘭縣",
+"name": "味珍香卜肉店",
+"known_for": "卜肉"
+},
+{
+"county": "屏東縣",
+"name": "邱家生魚片",
+"known_for": "厚切生魚片"
+},
+{
+"county": "屏東縣",
+"name": "輝哥生魚片",
+"known_for": "生魚片"
+},
+{
+"county": "屏東縣",
+"name": "萬巒豬腳大王",
+"known_for": "萬巒豬腳"
+},
+{
+"county": "屏東縣",
+"name": "潮州冷熱冰",
+"known_for": "冷熱冰"
+},
+{
+"county": "彰化縣",
+"name": "阿璋肉圓",
+"known_for": "肉圓"
+},
+{
+"county": "彰化縣",
+"name": "貓鼠麵",
+"known_for": "貓鼠麵"
+},
+{
+"county": "彰化縣",
+"name": "北門口肉圓",
+"known_for": "炸肉圓"
+},
+{
+"county": "彰化縣",
+"name": "鹿港老龍師肉包",
+"known_for": "香菇肉包"
+},
+{
+"county": "彰化縣",
+"name": "阿振肉包",
+"known_for": "原味肉包"
+},
+{
+"county": "新北市",
+"name": "金山鴨肉",
+"known_for": "廟口鴨肉"
+},
+{
+"county": "新北市",
+"name": "阿柑姨芋圓",
+"known_for": "芋圓冰"
+},
+{
+"county": "新北市",
+"name": "三重朱記花枝羹",
+"known_for": "花枝羹"
+},
+{
+"county": "新竹市",
+"name": "鴨肉許",
+"known_for": "鴨肉麵及炒鴨血"
+},
+{
+"county": "新竹市",
+"name": "廟口鴨香飯",
+"known_for": "煙燻鴨香飯加半熟蛋"
+},
+{
+"county": "澎湖縣",
+"name": "阿豹香腸攤",
+"known_for": "大腸包小腸與黑輪"
+},
+{
+"county": "澎湖縣",
+"name": "郵局口蔥油餅",
+"known_for": "炸蔥油餅加小黃瓜絲"
+},
+{
+"county": "臺中市",
+"name": "宮原眼科",
+"known_for": "冰淇淋與鳳梨酥"
+},
+{
+"county": "臺中市",
+"name": "第四信用合作社",
+"known_for": "特色冰品與豐仁冰"
+},
+{
+"county": "臺中市",
+"name": "春水堂",
+"known_for": "珍珠奶茶與功夫麵"
+},
+{
+"county": "臺中市",
+"name": "湖南味",
+"known_for": "牛肉麵與滷菜"
+},
+{
+"county": "臺中市",
+"name": "沁園春",
+"known_for": "江浙菜與上海小籠包"
+},
+{
+"county": "臺北市",
+"name": "鼎泰豐",
+"known_for": "小籠包"
+},
+{
+"county": "臺北市",
+"name": "永康牛肉麵",
+"known_for": "紅燒牛肉麵"
+},
+{
+"county": "臺北市",
+"name": "金峰滷肉飯",
+"known_for": "滷肉飯"
+},
+{
+"county": "臺北市",
+"name": "阿宗麵線",
+"known_for": "大腸麵線"
+},
+{
+"county": "臺北市",
+"name": "小王煮瓜",
+"known_for": "滷肉飯與清湯瓜仔肉"
+},
+{
+"county": "臺北市",
+"name": "阜杭豆漿",
+"known_for": "厚燒餅油條與鹹豆漿"
+},
+{
+"county": "臺北市",
+"name": "天津蔥抓餅",
+"known_for": "蔥抓餅"
+},
+{
+"county": "臺北市",
+"name": "明月湯包",
+"known_for": "小籠湯包"
+},
+{
+"county": "臺北市",
+"name": "天天利美食坊",
+"known_for": "半熟蛋滷肉飯"
+},
+{
+"county": "臺北市",
+"name": "林東芳牛肉麵",
+"known_for": "牛肉麵配特製牛油"
+},
+{
+"county": "臺北市",
+"name": "劉媽媽飯糰",
+"known_for": "傳統手工飯糰"
+},
+{
+"county": "臺北市",
+"name": "藍家割包",
+"known_for": "割包"
+},
+{
+"county": "臺北市",
+"name": "東一排骨",
+"known_for": "排骨飯"
+},
+{
+"county": "臺南市",
+"name": "文章牛肉湯",
+"known_for": "牛肉湯"
+},
+{
+"county": "臺南市",
+"name": "六千綜合牛肉湯",
+"known_for": "極早開賣的鮮甜牛肉湯"
+},
+{
+"county": "臺南市",
+"name": "石精臼牛肉湯",
+"known_for": "牛肉湯"
+},
+{
+"county": "臺南市",
+"name": "度小月擔仔麵",
+"known_for": "擔仔麵"
+},
+{
+"county": "臺南市",
+"name": "阿霞飯店",
+"known_for": "紅蟳米糕"
+},
+{
+"county": "臺南市",
+"name": "阿堂鹹粥",
+"known_for": "虱目魚肚粥"
+},
+{
+"county": "臺南市",
+"name": "再發號肉粽",
+"known_for": "特製大肉粽"
+},
+{
+"county": "臺南市",
+"name": "福記肉圓",
+"known_for": "清蒸肉圓"
+},
+{
+"county": "臺南市",
+"name": "富盛號碗粿",
+"known_for": "碗粿"
+},
+{
+"county": "臺南市",
+"name": "同記安平豆花",
+"known_for": "傳統豆花"
+},
+{
+"county": "臺南市",
+"name": "義豐冬瓜茶",
+"known_for": "冬瓜茶"
+},
+{
+"county": "臺南市",
+"name": "江水號",
+"known_for": "傳統冰品與芋頭湯"
+},
+{
+"county": "臺南市",
+"name": "進福炒鱔魚專家",
+"known_for": "鱔魚意麵"
+},
+{
+"county": "臺南市",
+"name": "阿江炒鱔魚",
+"known_for": "大火快炒鱔魚意麵"
+},
+{
+"county": "臺南市",
+"name": "落成米糕",
+"known_for": "傳統米糕"
+},
+{
+"county": "臺南市",
+"name": "悅津鹹粥",
+"known_for": "24小時營業鹹粥"
+},
+{
+"county": "臺南市",
+"name": "永樂燒肉飯",
+"known_for": "炭烤燒肉飯"
+},
+{
+"county": "臺南市",
+"name": "阿財點心",
+"known_for": "傳統香腸熟肉"
+},
+{
+"county": "臺南市",
+"name": "集品蝦仁飯",
+"known_for": "蝦仁飯"
+},
+{
+"county": "臺東縣",
+"name": "藍蜻蜓速食專賣店",
+"known_for": "炸雞餐"
+},
+{
+"county": "臺東縣",
+"name": "黃記蔥油餅",
+"known_for": "雙蛋蔥油餅"
+},
+{
+"county": "臺東縣",
+"name": "林家臭豆腐",
+"known_for": "臭豆腐"
+},
+{
+"county": "臺東縣",
+"name": "老東台米苔目",
+"known_for": "米苔目"
+},
+{
+"county": "臺東縣",
+"name": "東河包子",
+"known_for": "肉包"
+},
+{
+"county": "臺東縣",
+"name": "津芳冰城",
+"known_for": "鹹冰棒"
+},
+{
+"county": "臺東縣",
+"name": "米巴奈山地美食",
+"known_for": "阿粨"
+},
+{
+"county": "花蓮縣",
+"name": "公正包子",
+"known_for": "小籠包"
+},
+{
+"county": "花蓮縣",
+"name": "周家蒸餃",
+"known_for": "蒸餃"
+},
+{
+"county": "花蓮縣",
+"name": "炸彈蔥油餅",
+"known_for": "炸彈蔥油餅"
+},
+{
+"county": "花蓮縣",
+"name": "戴記扁食",
+"known_for": "扁食湯"
+},
+{
+"county": "花蓮縣",
+"name": "液香扁食",
+"known_for": "扁食"
+},
+{
+"county": "花蓮縣",
+"name": "廟口紅茶",
+"known_for": "杏仁茶與台式馬卡龍"
+},
+{
+"county": "花蓮縣",
+"name": "豐春冰菓店",
+"known_for": "甘蔗冰"
+},
+{
+"county": "花蓮縣",
+"name": "玉里橋頭臭豆腐",
+"known_for": "臭豆腐"
+},
+{
+"county": "花蓮縣",
+"name": "花蓮香扁食",
+"known_for": "鮮蝦扁食"
+},
+{
+"county": "花蓮縣",
+"name": "海埔蚵仔煎",
+"known_for": "蚵仔煎"
+},
+{
+"county": "連江縣",
+"name": "阿妹的店面",
+"known_for": "鼎邊糊"
+},
+{
+"county": "連江縣",
+"name": "依嬤的店",
+"known_for": "風味套餐"
+},
+{
+"county": "金門縣",
+"name": "永春廣東粥",
+"known_for": "廣東粥配油條"
+},
+{
+"county": "金門縣",
+"name": "良金牧場",
+"known_for": "現燙溫體牛肉麵"
+},
+{
+"county": "高雄市",
+"name": "寬來順早餐店",
+"known_for": "眷村味包子與蛋餅"
+},
+{
+"county": "高雄市",
+"name": "港園牛肉麵館",
+"known_for": "牛肉拌麵"
+},
+{
+"county": "高雄市",
+"name": "老牌周燒肉飯",
+"known_for": "炭香燒肉飯"
+},
+{
+"county": "高雄市",
+"name": "郭家肉粽",
+"known_for": "傳統南部粽與四神湯"
+},
+{
+"county": "高雄市",
+"name": "鴨肉珍",
+"known_for": "鴨肉飯與下水湯"
+},
+{
+"county": "高雄市",
+"name": "正忠排骨飯",
+"known_for": "排骨飯"
+}
+]
+}

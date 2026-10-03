@@ -28,11 +28,11 @@ Follow-up to test memory: after query 2, ask `Is the second one you listed regis
 | Tool | What it does | Data source |
 |---|---|---|
 | `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
-| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), plus local night-market schedules |
+| `find_local_food` | Restaurants by dish (English keywords are translated to Chinese) and night markets, award winners first; `style: local` for where locals eat, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
-| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names. Name lookups tolerate different wording (士林夜市 finds 士林觀光夜市) and report closed places | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback) |
+| `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names. Name lookups tolerate different wording (士林夜市 finds 士林觀光夜市) and report closed places. Ranked by fame; `style: local` for places locals like, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
 | `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
@@ -62,6 +62,20 @@ Each tool still validates its own arguments. Sessions keep the last 20 user turn
 3. `uv run app.py`, then open http://localhost:8000
 4. Tests (network mocked): `uv run pytest`
 
+## Ranking data
+
+Official listings carry no popularity signal, so the bundled files in `tools/data/` add one. Each has a build script; none is needed at runtime.
+
+| File | Built by | What it holds | Sources and terms |
+|---|---|---|---|
+| `attraction_fame.json` | [scripts/build_fame.py](scripts/build_fame.py) | Fame (Chinese Wikipedia views, article length, languages, per county), English fame (English Wikipedia views), and local fame (known in Chinese, little read in English) | Wikidata (CC0), Wikimedia pageviews |
+| `extra_attractions.json` | same | Sights the register lacks (駁二, 花園夜市), not closed | Wikidata (CC0) |
+| `local_favorites.json` | [scripts/label_local_favorites.py](scripts/label_local_favorites.py) | 226 places labeled as where locals go: Qwen labels, then a second review ([data/local_review.csv](data/local_review.csv)) | Model labels |
+| `osm_food.json.gz` | [scripts/build_osm_food.py](scripts/build_osm_food.py) | 48,401 restaurants, cafes and stalls | © OpenStreetMap contributors, [ODbL 1.0](https://www.openstreetmap.org/copyright) |
+| `food_fame.json` | [scripts/build_food_fame.py](scripts/build_food_fame.py) | Food fame (strongest award) and local score (500盤/500碗 rating, lowered by Michelin and for chains), awards per place, and Michelin restaurants OSM lacks | Michelin Guide Taiwan via [michelin-my-maps](https://github.com/ngshiheng/michelin-my-maps); 500盤 and 500碗 lists by 500輯 (udn), in `data/food_awards/` |
+
+**Research and education use only.** This is a course project. The Michelin Guide data (michelin-my-maps states its data is for research use only) and the 500盤/500碗 lists (© 500輯) are used for research and education, not commercially, and are not redistributed for other use. Remove `food_fame.json` and `data/food_awards/` before any commercial use; the food tool then ranks by OpenStreetMap order.
+
 ## Crowd-risk evidence
 
 `crowd_risk_check` compares day types with 2026 TRA station-entry counts through September 1. For each historical date, the [calibration script](scripts/calibrate_crowd_risk.py) divides total entries by the median on ordinary days of the same weekday within 56 days. A pattern needs at least five sampled days and a median ratio of 1.2 or higher for a high rating. The pre-break days meet that threshold; first and last days of long breaks do not. The [compact calibration](tools/data/crowd_calibration.json) is bundled, so normal lookups only download the annual calendar. Run `uv run python scripts/calibrate_crowd_risk.py` to refresh the calibration from the official files. Station entries are a network-wide proxy, not train occupancy, HSR demand, or a route-specific forecast.
@@ -87,6 +101,8 @@ tools/transport.py  hsr_trip_planner (THSR and TRA)
 tools/holidays.py   crowd_risk_check (official calendar, estimated travel pressure)
 tools/attractions.py find_attractions (and pins for the places an answer recommends)
 tools/weather.py    typhoon_backup_plan (CWA forecast and typhoon warnings)
+scripts/            builds for the bundled data (fame, extra sights, local favorites, OSM food, food awards)
+data/               source lists for builds (food awards, local-favorite review)
 static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
 tests/              tool, harness, and guardrail tests
 ```

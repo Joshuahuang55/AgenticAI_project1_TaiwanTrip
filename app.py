@@ -44,7 +44,7 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
 load_dotenv()
 
 from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
-from tools import attractions, tourism_data  # noqa: E402
+from tools import attractions, food, tourism_data  # noqa: E402
 import guardrails  # noqa: E402
 from guardrails import ChatState  # noqa: E402
 
@@ -163,6 +163,7 @@ def get_session(session_id: str) -> ChatState:
     if session_id not in sessions and len(sessions) >= MAX_SESSIONS:
         oldest, _ = sessions.popitem(last=False)
         attractions.forget_session(oldest)
+        food.forget_session(oldest)
     state = sessions.pop(session_id, None) or ChatState()
     sessions[session_id] = state  # most recently used last
     return state
@@ -191,7 +192,8 @@ class ChatResponse(BaseModel):
     response: str
     session_id: str
     tool_calls: list[dict]
-    # Sights the answer recommends, for the map. Not a tool call, so kept out of tool_calls.
+    # Sights and restaurants the answer recommends, for the map ("kind": the tool that found them).
+    # Not a tool call, so kept out of tool_calls.
     map_pins: list[dict] = []
 
 
@@ -210,9 +212,11 @@ async def chat(request: ChatRequest):
     try:
         response = await run_turn(state, request.message)
         tool_calls = [{k: c[k] for k in ("name", "args", "result")} for c in state.turn_calls()]
-        # Sights: search results are unpinned candidates; pin only the places the answer recommends.
-        if any(c["name"] == "find_attractions" for c in tool_calls):
-            map_pins = attractions.pins_from_answer(response)
+        # Sights and food: search results are unpinned candidates; pin only the places the answer recommends.
+        called = {c["name"] for c in tool_calls}
+        for tool, module in (("find_attractions", attractions), ("find_local_food", food)):
+            if tool in called:
+                map_pins += [dict(p, kind=tool) for p in module.pins_from_answer(response)]
     except Exception:
         # Auth, billing, a model that is not running: details go to the log, not to the user.
         log.exception("Model call failed")
@@ -225,6 +229,7 @@ async def chat(request: ChatRequest):
 def clear(session_id: str | None = None):
     sessions.pop(session_id, None)
     attractions.forget_session(session_id)
+    food.forget_session(session_id)
     return {"status": "ok"}
 
 
