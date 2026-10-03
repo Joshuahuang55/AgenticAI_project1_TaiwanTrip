@@ -164,7 +164,7 @@ def test_rank_prefers_name_match_then_documented(fake_tdx):
     assert [r["name"] for r in out["results"]] == ["虎山步道", "象山步道", "河濱公園"]
 
 
-def test_spread_takes_one_per_series_or_district_first(fake_tdx):
+def test_spread_takes_one_per_series_first(fake_tdx):
     _, data = fake_tdx
     trail = lambda i, name, town: dict(PORT, AttractionID=f"T{i}", AttractionName=name,
                                        PostalAddress={"City": "臺北市", "Town": town, "StreetAddress": str(i)})
@@ -174,8 +174,94 @@ def test_spread_takes_one_per_series_or_district_first(fake_tdx):
     ]
     out = json.loads(attractions.find_attractions("Taipei", keyword="trail", limit=4))
     assert [r["name"] for r in out["results"]] == [
-        "大屯山系_忠義山親山步道", "南港山系_象山親山步道", "碧湖步道", "大屯山系_中正山步道"]
-    assert out["more_candidates"] == {"內湖區": ["大湖公園步道"]}
+        "大屯山系_忠義山親山步道", "南港山系_象山親山步道", "碧湖步道", "大湖公園步道"]  # one district twice
+    assert out["more_candidates"] == {"北投區": ["大屯山系_中正山步道"]}  # the series' second trail waits
+
+
+def test_fame_ranks_well_known_places_first(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    temple = lambda i, name: dict(TEMPLE, AttractionID=f"F{i}", AttractionName=name)
+    data[attractions.ATTRACTION_PATH] = [temple(1, "西港慶安宮"), temple(2, "臺灣祀典武廟"), temple(3, "大天后宮")]
+    monkeypatch.setattr(attractions, "FAME", {"F2": 0.97, "F3": 0.99})
+    out = json.loads(attractions.find_attractions("Tainan", keyword="temple"))
+    assert [r["name"] for r in out["results"]] == ["大天后宮", "臺灣祀典武廟", "西港慶安宮"]
+
+
+def test_nature_searches_by_kind_not_by_the_word_nature(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    place = lambda i, name, classes: dict(PORT, AttractionID=f"N{i}", AttractionName=name, AttractionClasses=classes)
+    data[attractions.ATTRACTION_PATH] = [
+        place(1, "蜜蜂生態教育館", [2]), place(2, "三仙台風景區", [2, 8, 12]), place(3, "清水斷崖", [12]),
+        place(4, "某大學", [18]), place(5, "八仙洞", [3, 8, 11]), place(6, "綠島人權紀念園區", [8])]
+    monkeypatch.setattr(attractions, "FAME", {"N5": 0.97, "N2": 0.95})
+    out = json.loads(attractions.find_attractions("Taitung", keyword="nature"))
+    assert [r["name"] for r in out["results"]] == ["八仙洞", "三仙台風景區", "清水斷崖"]  # by fame; no eco centre, campus
+    assert out["searched_as"].startswith("natural scenery")
+
+
+def test_coast_is_searched_with_chinese_words(fake_tdx):
+    calls, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [dict(PORT, AttractionName="外澳海灘")]
+    out = json.loads(attractions.find_attractions("Yilan", keyword="coast"))
+    assert [r["name"] for r in out["results"]] == ["外澳海灘"] and "contains(AttractionName,'海岸')" in calls[0][1]["$filter"]
+
+
+def test_local_style_ranks_reviewed_favorites_then_local_fame(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    temple = lambda i, name: dict(TEMPLE, AttractionID=f"L{i}", AttractionName=name)
+    data[attractions.ATTRACTION_PATH] = [temple(1, "龍山寺"), temple(2, "小巷廟"), temple(3, "老街廟")]
+    monkeypatch.setattr(attractions, "FAME", {"L1": 0.99, "L2": 0.5, "L3": 0.6})
+    monkeypatch.setattr(attractions, "LOCAL_FAME", {"L1": 0.05, "L2": 0.5, "L3": 0.6})
+    monkeypatch.setattr(attractions, "LOCAL_FAVORITES", {"L2": "local_favorite"})
+    must = json.loads(attractions.find_attractions("Taipei", keyword="temple"))
+    assert [r["name"] for r in must["results"]] == ["龍山寺", "老街廟", "小巷廟"] and must["style"] == "must_see"
+    local = json.loads(attractions.find_attractions("Taipei", keyword="temple", style="local"))
+    assert [r["name"] for r in local["results"]] == ["小巷廟", "老街廟", "龍山寺"]
+    assert local["results"][0]["local_favorite"] is True and "local_favorite" not in local["results"][1]
+
+
+def test_must_see_results_end_with_local_gems(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    temple = lambda i, name: dict(TEMPLE, AttractionID=f"M{i}", AttractionName=f"{name}廟")
+    data[attractions.ATTRACTION_PATH] = [temple(i, f"名{i}") for i in range(1, 8)] + [temple(8, "巷"), temple(9, "海")]
+    monkeypatch.setattr(attractions, "FAME", {f"M{i}": 1 - i / 10 for i in range(1, 8)})
+    monkeypatch.setattr(attractions, "LOCAL_FAME", {"M9": 0.9, "M7": 0.2})
+    monkeypatch.setattr(attractions, "LOCAL_FAVORITES", {"M8": "local_favorite"})
+    out = json.loads(attractions.find_attractions("Taipei", keyword="temple", limit=5))
+    names = [r["name"] for r in out["results"]]
+    assert names == ["名1廟", "名2廟", "名3廟", "巷廟", "海廟"]  # 3 best known, then 2 gems
+    assert [r.get("local_gem", False) for r in out["results"]] == [False, False, False, True, True]
+    small = json.loads(attractions.find_attractions("Taipei", keyword="temple", limit=3))
+    assert not any(r.get("local_gem") for r in small["results"])  # too few slots to spare
+
+
+def test_local_picks_hold_at_most_a_third_temples_unless_temples_were_asked():
+    rows = [{"AttractionName": n} for n in ("甲廟", "乙宮", "丙寺", "某湖", "某街", "某島")]
+    assert [r["AttractionName"] for r in attractions._few_temples(rows, 3, ())] == [
+        "甲廟", "某湖", "某街", "某島", "乙宮", "丙寺"]
+    assert attractions._few_temples(rows, 3, ("廟",)) == rows
+
+
+def test_dedupe_drops_a_listing_named_inside_another():
+    row = lambda name, town="安平區": {"AttractionName": name, "PostalAddress": {"Town": town}}
+    rows = [row("安平古堡"), row("臺灣城殘蹟(安平古堡內牆)"), row("台南林百貨", "中西區"), row("臺南林百貨", "中西區"),
+            row("天后宮", "中西區"), row("鹿港天后宮", "鹿港鎮")]
+    assert [r["AttractionName"] for r in attractions._dedupe(rows)] == ["安平古堡", "台南林百貨", "天后宮", "鹿港天后宮"]
+
+
+def test_unknown_style_is_an_error_with_a_hint():
+    out = json.loads(attractions.find_attractions("Taipei", style="cheap"))
+    assert "error" in out and "local" in out["hint"]
+
+
+def test_a_name_match_still_beats_fame(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    famous_mention = dict(PORT, AttractionID="G1", AttractionName="安平古堡", Description="旁邊有廟")
+    temple = dict(TEMPLE, AttractionID="G2", AttractionName="小廟")
+    data[attractions.ATTRACTION_PATH] = [famous_mention, temple]
+    monkeypatch.setattr(attractions, "FAME", {"G1": 1.0})
+    out = json.loads(attractions.find_attractions("Tainan", keyword="temple"))
+    assert [r["name"] for r in out["results"]] == ["小廟", "安平古堡"]
 
 
 def test_names_expands_picks_from_recent_search_without_tdx(fake_tdx):
@@ -343,3 +429,27 @@ def test_sessions_do_not_share_recent_searches():
     attractions.forget_session("traveler-a")
     attractions.use_session("traveler-a")
     assert attractions.pins_from_answer("See 赤崁樓.") == []
+
+
+GARDEN = {"AttractionID": "wikidata:Q1", "AttractionName": "花園夜市", "PositionLat": 23.01, "PositionLon": 120.2,
+          "AttractionClasses": [], "ServiceStatus": 1, "Description": "", "Source": "Wikidata",
+          "PostalAddress": {"City": "臺南市", "Town": "北區"}}
+
+
+def test_search_adds_wikidata_sights_the_register_lacks(fake_tdx, monkeypatch):
+    _, data = fake_tdx
+    data[attractions.ATTRACTION_PATH] = [dict(TEMPLE, AttractionName="大東夜市")]
+    monkeypatch.setattr(attractions, "EXTRA", [GARDEN])
+    monkeypatch.setattr(attractions, "FAME", {"wikidata:Q1": 0.9})
+    out = json.loads(attractions.find_attractions("Tainan", keyword="夜市"))
+    assert [r["name"] for r in out["results"]] == ["花園夜市", "大東夜市"]
+    assert "Wikidata" in out["source"] and "Not in the official register" in out["results"][0]["note"]
+    assert json.loads(attractions.find_attractions("Tainan", keyword="夜市", district="中西區"))["results"][0]["name"] == "大東夜市"
+
+
+def test_name_lookup_falls_back_to_wikidata_sights(fake_tdx, monkeypatch):
+    monkeypatch.setattr(attractions, "EXTRA", [GARDEN])
+    out = json.loads(attractions.find_attractions("Tainan", names=["花園夜市"]))
+    assert [r["name"] for r in out["results"]] == ["花園夜市"] and out["results"][0]["lat"] == 23.01
+    assert out["source"].endswith("plus Wikidata")
+    assert [r["name"] for r in attractions.pins_from_answer("Go to Garden Night Market (花園夜市).")] == ["花園夜市"]
