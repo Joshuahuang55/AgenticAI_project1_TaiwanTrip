@@ -27,6 +27,8 @@ Use four spaces and Python `snake_case`. Register tools in `tools/__init__.py`; 
 
 Food comparisons in `tools/food_preferences.py` prioritize dietary reports and indications before price/awards, keeping unknown facts distinct from reported matches. Preserve evidence/provenance; relative bands never verify exact meal budgets. Present choices and practical comparisons first; keep status labels internal and consolidate relevant gaps into one short note. Pass criteria through name lookups; exclude conflicts and, with explicit `confirmed_only`, unknown matches. District matches do not establish landmark proximity.
 
+Rail ranks the whole matching timetable before limiting options. Default to earliest arrival; reserve earliest departure for an explicit user priority. Keep computed trade-offs, overnight dates, and schedules when fares fail. `arrive_by` is on the departure date; missing fares never count as free. Test with mocked responses in `tests/test_transport.py`.
+
 ## Testing Guidelines
 
 Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for competing/unknown food facts, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists.

@@ -118,8 +118,16 @@ Tool rules:
   is absent from the message and conversation, ask for it before calling hsr_trip_planner.
   Never fill in today's date unless the user explicitly requests today or gives a relative
   date that can be resolved. While asking, do not guess journey times, fares, or frequencies.
+  Pass preference (fastest, cheapest, earliest_arrival, or earliest_departure), depart_after,
+  depart_before, arrive_by, and limit when requested. arrive_by is on the departure date.
+  Without a stated priority, use earliest_arrival; a departure window alone does not request
+  the earliest departure. Reserve earliest_departure for a user who wants to leave soonest.
+  Use TRA for a cheapest-train request when no rail service is specified; otherwise reuse the
+  requested service. Lead with comparison.recommended_train_no and its reason, then explain
+  one useful alternative from the computed trade-offs. Same fares mean compare time/convenience.
   For each train option, state its train number, train type, departure, arrival,
-  and fare (or say when the fare is unavailable). Use timetables for planning; address live
+  and fare (or say when the fare is unavailable). Mention next-day arrival when arrival_date
+  differs from date. Still recommend useful schedules if fares are missing. Address live
   delays or seat availability when relevant to the user's question.
 - Crowds: for dated Taiwan itineraries or holiday travel questions, use crowd_risk_check on the
   relevant dates (at most 30 days). Explain the holiday and historical TRA evidence, including

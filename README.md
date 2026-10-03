@@ -72,7 +72,7 @@ they do not establish whether Gemini follows this policy.
 | `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
 | `find_local_food` | Restaurants by dish and night markets; preference evidence first when criteria are supplied, then awards/local score. Returns sourced facts, missing fields, and comparison checks; `style: local` for locals' favorites | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
-| `hsr_trip_planner` | Up to three THSR or TRA trains with published adult one-way fares (no live seat availability) | TDX rail timetables and fares |
+| `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
 | `find_attractions` | Sights by city, keyword (English translated to Chinese), and district. Returns candidates plus every other listing by district so the model can pick famous places; the map pins only the places the answer names. Name lookups tolerate different wording (士林夜市 finds 士林觀光夜市) and report closed places. Ranked by fame; `style: local` for places locals like, and one or two local gems in default results | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
 | `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
@@ -88,7 +88,7 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 | Food | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated |
 | Attractions | Categories, description, address, listed hours and admission information | Many hours/fees are missing; no measured visit duration or walking time |
 | Lodging | Registration, license, address, certification, owner-reported price range | Registration is not a quality rating; no live rooms or booking prices |
-| Rail | Train type/number, departure, arrival, duration, published fare | At most three options per query; no live seats/delays; fares can be missing |
+| Rail | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
 | Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
 | Weather | Forecast dates, rain chance, temperature, warning, backup listings | Limited forecast horizon; seasonal notes are not forecasts and warnings are current |
 | Exchange | Rate, rate date, converted amount, sampled historical comparison | Mid-market snapshot; no actual cash-counter quote or travel prices; average uses weekly samples |
@@ -96,8 +96,8 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
 as **unavailable**. Source claims are **reported**, not independently verified. Compare only
 available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
-The first implementation of explicit fact/comparison fields is food; the other tools retain
-their existing domain outputs. Existing `/chat` fields and map behavior are preserved.
+Food and rail now include explicit comparison fields; the other tools retain their existing
+domain outputs. Existing `/chat` fields and map behavior are preserved.
 
 ### Food preference comparisons
 
@@ -140,6 +140,28 @@ Inspect dietary/price arguments and checks: the agent should explain its choice 
 and disclose unconfirmed dietary evidence and exact prices. Missing results must not become
 invented recommendations. Automated comparison tests use competing fictional candidates;
 real-model behavior needs a separate conversation check.
+
+### Train preferences and comparisons
+
+`hsr_trip_planner` ranks the whole matching timetable before selecting `limit` options (1–10,
+default 3). `preference` accepts `earliest_arrival` (default), `fastest`, `cheapest`, or
+`earliest_departure`. Default ranking favors arriving soonest, with ties favoring shorter journeys;
+earliest departure applies only when requested. Cheapest compares adult standard-class fares, with ties favoring
+shorter journeys; unknown fares are never treated as free. Each query compares one rail service.
+
+`depart_after` and `depart_before` define an inclusive departure window in `HH:MM`.
+`arrive_by` is an inclusive arrival deadline on the **same travel date**, not the following day.
+Overnight journeys include `arrival_date`, and arrival ranking accounts for the day change.
+
+The existing `trains` list retains train types, times, durations, and fares. `comparison` adds
+the recommended train, reason, matching/returned counts, equal-fare flag, and computed time/fare
+differences for alternatives. Missing fares leave schedules usable; for `cheapest` with no fares,
+the tool recommends the earliest arrival instead. Station/timetable failures still return errors.
+Ranking uses the same station, timetable, and fare requests as before, without per-train requests.
+
+Try: `Find three HSR options from Taipei to Tainan on October 8, 2026. Depart between 09:00 and
+12:00 and arrive by 14:00. Prefer the fastest journey. Which would you choose?`
+Then: `Keep the same route and date, but show five options and prioritize the earliest arrival.`
 
 ## Guardrails
 
