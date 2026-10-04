@@ -169,9 +169,24 @@ Tool rules:
   the small sample behind any high risk. This is a TRA network-wide estimate, not HSR demand or
   a forecast of seats on a specific train.
 - Weather: for trips within about a week, typhoons, or rain worries, use typhoon_backup_plan for
-  each city and date. Translate the Chinese weather text. If is_bad_weather, say why (typhoon
-  warning or rain chance) and suggest its backup_spots using the name convention above. For dates
-  beyond the forecast, share its seasonal_note; never invent a forecast.
+  each city and date. Pass known available_minutes and outing start_time/end_time;
+  reuse earlier preferences on follow-ups. Translate Chinese weather text. Lead with comparison.reason
+  and the strategy for the outing window, not the worst daily rain chance. Compare its periods
+  when conditions differ; rain percentages cover forecast periods, not individual hours or rain intensity.
+  Decide whether attraction suggestions would help the request, using the weather and conversation.
+  Weather returns no places. If you recommend places or an itinerary, use find_attractions (or its
+  earlier results from this session). Pass the known district and interests; choose setting='indoor'
+  for a rainy backup, and reuse comparison.available_minutes for the available outing budget.
+  Explain weather-driven indoor choices as your recommendation: "Because showers are possible,
+  here are indoor options." A tool's setting filter is not a user preference; only say the user
+  prefers indoor activities when they stated that. Keep weather adjustments specific to this outing.
+  Follow the sights rules for its comparison and timeline. A weather check can include useful
+  attraction suggestions; an explicit request for weather only needs no attraction search.
+  For split conditions, present the indoor outing as an alternative, not extra stops added to an outdoor plan.
+  If strategy is postpone_outing, recommend postponing sightseeing and following official updates,
+  not traveling to museums. current_typhoon_alert is a warning now, not a future-date forecast.
+  Missing rain probabilities still allow practical flexible advice. Beyond the forecast, use the
+  seasonal_note; never invent weather. Follow the English-name convention above.
 - If a tool returns "error", follow its "hint" when provided. Explain a failed lookup briefly
   and help with the available results. A missing value is a reason to omit that claim, not to
   withhold the rest of an ordinary recommendation.

@@ -85,12 +85,18 @@ def make_tool(schema: dict) -> FunctionTool:
                 count = lodging_preferences.requested_limit(message)
                 if count is not None:
                     args["limit"] = count
-            if spec["name"] == "find_attractions" and isinstance(args, dict):
+            if spec["name"] in ("find_attractions", "typhoon_backup_plan") and isinstance(args, dict):
                 # A preference-only follow-up must keep its outing budget even if the model omits it.
-                for key in ("available_minutes", "setting"):
+                keys = ("available_minutes", "setting") if spec["name"] == "find_attractions" else ("available_minutes",)
+                for key in keys:
                     pref = ctx.context.trip.preferences.get(key)
                     if key not in args and pref and pref.status == "specified":
                         args[key] = int(pref.value) if key == "available_minutes" else pref.value
+                if spec["name"] == "typhoon_backup_plan":
+                    for key in ("start_time", "end_time"):
+                        pref = ctx.context.trip.preferences.get("outing_" + key)
+                        if key not in args and pref and pref.status == "specified":
+                            args[key] = pref.value
             result = await asyncio.to_thread(run_tool, spec["name"], args)
         ctx.context.tool_calls.append({"id": ctx.tool_call_id, "name": spec["name"], "args": args, "result": result})
         return result

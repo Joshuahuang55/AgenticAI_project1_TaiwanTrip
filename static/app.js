@@ -16,7 +16,7 @@ const TOOL_META = {
     find_attractions: { icon: "🏯", color: "#7c3aed", label: "Sights", gist: (a) => `${a.keyword || "sights"} in ${a.city}` },
     hsr_trip_planner: { icon: "🚄", color: "#2563eb", gist: (a) => `${a.origin} → ${a.destination} on ${a.date}` },
     crowd_risk_check: { icon: "📅", color: "#be123c", gist: (a) => `${a.start_date} → ${a.end_date}` },
-    typhoon_backup_plan: { icon: "🌀", color: "#0369a1", label: "Backup", gist: (a) => `${a.city} on ${a.date}` },
+    typhoon_backup_plan: { icon: "🌀", color: "#0369a1", label: "Weather", gist: (a) => `${a.city} on ${a.date}` },
     get_weather: { icon: "🌤️", color: "#0369a1", gist: (a) => a.location },
 };
 const metaFor = (name) => TOOL_META[name] || { icon: "🔧", color: "#6b7280", gist: (a) => JSON.stringify(a) };
@@ -231,12 +231,23 @@ function showTrains(data) {
 }
 
 function showWeather(data) {
-    const bad = data.is_bad_weather || (data.typhoon_alert && data.typhoon_alert !== "none");
+    const comparison = data.comparison || {};
+    const bad = data.is_bad_weather === true;
     const f = data.forecast || {};
-    const text = bad
-        ? `⚠ ${typeof data.typhoon_alert === "string" ? data.typhoon_alert : "Bad weather expected"}. Indoor backups are on the map.`
-        : `☀ ${f.weather || "Looks fine"}${f.rain_chance !== undefined ? ` · rain ${f.rain_chance}%` : ""}`;
-    $("weather-body").replaceChildren(el("div", "alert" + (bad ? "" : " calm"), text));
+    const text = comparison.reason || data.seasonal_note || (data.typhoon_alert
+        ? "An active typhoon warning is in effect. Follow official updates."
+        : f.weather || "Forecast unavailable.");
+    const details = [el("div", "alert" + (bad ? "" : " calm"), `${bad ? "⚠ " : ""}${text}`)];
+    if (comparison.outing_window) {
+        const w = comparison.outing_window;
+        details.push(el("div", "", `Outing: ${w.start}–${w.end} (Taiwan time)`));
+    }
+    for (const p of comparison.periods || []) {
+        const rain = p.rain_chance == null ? "Rain chance unavailable" : `Rain chance ${p.rain_chance}%`;
+        details.push(el("div", "", `${p.outing_start}–${p.outing_end}: ${rain} · ${p.activity_preference}`));
+    }
+    if (comparison.warning_note) details.push(el("div", "", comparison.warning_note));
+    $("weather-body").replaceChildren(...details);
     $("weather-card").hidden = false;
 }
 

@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("taiwan_trip")
 TripField = Literal["city", "area", "start_date", "end_date", "departure_point", "budget",
-                    "interests", "dietary_needs", "follow_up_questions", "available_minutes", "setting"]
+                    "interests", "dietary_needs", "follow_up_questions", "available_minutes", "setting",
+                    "outing_start_time", "outing_end_time"]
 
 
 class PreferenceUpdate(BaseModel):
@@ -26,7 +27,7 @@ class PreferenceUpdate(BaseModel):
 
 
 class TripUpdates(BaseModel):
-    updates: list[PreferenceUpdate] = Field(default_factory=list, max_length=11)
+    updates: list[PreferenceUpdate] = Field(default_factory=list, max_length=13)
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,12 @@ class TripContext:
                     if not value.isascii() or not value.isdecimal() or not 15 <= int(value) <= 720:
                         continue
                     value = str(int(value))
+                if update.field in ("outing_start_time", "outing_end_time"):
+                    try:
+                        if dt.time.fromisoformat(value).strftime("%H:%M") != value:
+                            continue
+                    except ValueError:
+                        continue
             elif update.operation == "no_preference" and update.field not in (
                 "city", "area", "departure_point", "budget", "interests", "dietary_needs", "setting", "available_minutes"
             ):
@@ -86,7 +93,21 @@ class TripContext:
             if old_city is None or (old_city.value, old_city.status) != (new_city.value, new_city.status):
                 preferences.pop("area", None)
                 preferences.pop("available_minutes", None)  # The old outing budget belongs to its destination.
+                preferences.pop("outing_start_time", None)
+                preferences.pop("outing_end_time", None)
         preferences.update(accepted)
+        outing_start, outing_end = preferences.get("outing_start_time"), preferences.get("outing_end_time")
+        if outing_start and outing_end and outing_start.value and outing_end.value and outing_start.value >= outing_end.value:
+            # A corrected start can supersede an old end, and vice versa; reject an inverted new pair.
+            changed = {key for key in ("outing_start_time", "outing_end_time") if key in accepted}
+            if len(changed) == 1:
+                preferences.pop("outing_end_time" if "outing_start_time" in changed else "outing_start_time", None)
+            else:
+                for key in changed:
+                    if key in self.preferences:
+                        preferences[key] = self.preferences[key]
+                    else:
+                        preferences.pop(key, None)
         start, end = preferences.get("start_date"), preferences.get("end_date")
         if start and end and start.value and end.value and start.value > end.value:
             changed = {key for key in ("start_date", "end_date") if key in accepted}

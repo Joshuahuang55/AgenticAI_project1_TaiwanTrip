@@ -34,6 +34,12 @@ Fields:
   preferences. Never copy suggested visit lengths, train durations, or hotel nights into this field.
 - setting: "indoor", "outdoor", or "any" for the user's sightseeing setting preference.
   "I like indoor ones" sets indoor. This is a preference, not an interest or a confirmed property of a place.
+  Rain forecasts, assistant suggestions, and tool setting filters do not establish this preference.
+  "Can you recommend some attractions?" after a weather check does not mean the user prefers indoor activities.
+- outing_start_time, outing_end_time: explicit same-day sightseeing times in HH:MM Taiwan time.
+  "From 10am to 3pm" becomes 10:00 and 15:00, and available_minutes=300. Do not save train
+  departure windows or hotel check-in times as outing times. Preserve times on preference-only
+  follow-ups; clear old times when the user replaces the outing with an untimed one.
 - dietary_needs: a concise summary of stated dietary restrictions or preferences. Add new
   needs to saved ones unless explicitly corrected/removed. Do not turn a cuisine request into
   an allergy, infer vegetarian from a meat-free dish, or infer medical needs.

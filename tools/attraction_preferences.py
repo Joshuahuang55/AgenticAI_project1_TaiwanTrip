@@ -135,7 +135,7 @@ def _reason(row, interests, setting, available_minutes):
         parts.append("Matches " + ", ".join(match["matched_interests"]) if match["matched_interests"]
                      else "A broader sightseeing alternative to your requested interests")
     if setting != "any":
-        parts.append({"match": f"Suited to your {setting} preference", "partial": "Has indoor and outdoor parts",
+        parts.append({"match": f"Suitable for an {setting} plan", "partial": "Has indoor and outdoor parts",
                       "unknown": "Setting is unclear from its category", "different_setting": f"Mostly {info['setting']}"}
                      [match["setting_fit"]])
     parts.append(f"Allow roughly {info['visit_minutes']['min']}–{info['visit_minutes']['max']} minutes")

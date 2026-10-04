@@ -79,6 +79,47 @@ def test_outing_preferences_validate_before_saving(field, value):
     assert apply(tc.TripContext(), value, update(field, value)).as_dict() == {}
 
 
+def test_outing_clock_times_survive_refinement_and_clear_on_city_change():
+    current = apply(tc.TripContext(), "Taipei from 10am to 3pm", update("city", "Taipei"),
+                    update("outing_start_time", "10:00", "10am"), update("outing_end_time", "15:00", "3pm"))
+    refined = apply(current, "art", update("interests", "art"))
+    assert refined.preferences["outing_start_time"].value == "10:00"
+    assert refined.preferences["outing_end_time"].value == "15:00"
+    moved = apply(refined, "Tainan", update("city", "Tainan"))
+    assert "outing_start_time" not in moved.preferences and "outing_end_time" not in moved.preferences
+
+
+def test_corrected_start_drops_incompatible_old_end_and_inverted_pair_is_rejected():
+    current = apply(tc.TripContext(), "10:00 to 15:00", update("outing_start_time", "10:00"), update("outing_end_time", "15:00"))
+    revised = apply(current, "start at 16:00", update("outing_start_time", "16:00"))
+    assert revised.preferences["outing_start_time"].value == "16:00"
+    assert "outing_end_time" not in revised.preferences
+    rejected = apply(current, "16:00 to 12:00", update("outing_start_time", "16:00"), update("outing_end_time", "12:00"))
+    assert rejected.as_dict() == current.as_dict()
+
+
+@pytest.mark.parametrize("value", ["9am", "24:00", "10:00:00", "10:00+08:00"])
+def test_outing_times_require_local_hhmm(value):
+    assert apply(tc.TripContext(), value, update("outing_start_time", value)).as_dict() == {}
+
+
+def test_weather_wrapper_reuses_older_outing_window_and_time_budget(model, monkeypatch):
+    monkeypatch.setattr(app, "MAX_USER_TURNS", 1)
+    received = []
+    monkeypatch.setattr(app, "run_tool", lambda name, args: received.append(dict(args)) or json.dumps({"forecast": None}))
+    model([[_text("Initial suggestions.")], [_text("Hello.")],
+           [_call("typhoon_backup_plan", '{"city":"Taipei"}')],
+           [_text("Your indoor alternative.")]], context_updates=[
+        [update("city", "Taipei"), update("outing_start_time", "10:00"), update("outing_end_time", "15:00"),
+         update("available_minutes", "300", "five hours")], [], [update("interests", "art")]])
+    first = _chat("Taipei, five hours, 10:00 to 15:00")
+    _chat("Hello", first.session_id)
+    result = _chat("art", first.session_id)
+    assert received == [{"city": "Taipei", "available_minutes": 300,
+                         "start_time": "10:00", "end_time": "15:00"}]
+    assert result.tool_calls[0]["args"] == received[0]
+
+
 def test_tool_wrapper_restores_time_and_setting_on_preference_only_followup(model, monkeypatch):
     monkeypatch.setattr(app, "MAX_USER_TURNS", 1)
     received = []

@@ -56,6 +56,14 @@ def test_indoor_history_pick_and_useful_art_alternative(listings):
     assert comparison["alternatives"][1]["equally_suitable"] is False
 
 
+def test_setting_filter_does_not_claim_the_user_stated_a_preference(listings):
+    # The agent may choose indoor search criteria because of rain, without a user preference.
+    result = search(setting="indoor", available_minutes=300)
+    reasons = [result["comparison"]["reason"], *[a["reason"] for a in result["comparison"]["alternatives"]]]
+    assert "indoor plan" in reasons[0]
+    assert all("your indoor preference" not in reason for reason in reasons)
+
+
 def test_short_outing_prefers_fitting_visit_not_famous_long_trail(listings):
     result = search(interests=["nature", "hiking"], available_minutes=80)
     assert result["comparison"]["recommended_name"] == PARK["AttractionName"]

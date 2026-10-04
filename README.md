@@ -19,7 +19,8 @@ and a trip board (map, stay check, budget) is drawn from the tool results.
 5. `Recommend me mountain trails in Taipei.` then `Which one is best for sunset? Are there any temples near it?`
    → `find_attractions` for trails, then again with a district for nearby temples. Only the places named in the answer are pinned.
 6. `I'm going to Hualien this Saturday. Any typhoon or rain I should worry about?`
-   → `typhoon_backup_plan` checks the CWA forecast and typhoon warnings; on a bad day it adds indoor backups on the map.
+   → `typhoon_backup_plan` checks the CWA forecast and typhoon warnings. The agent can then call
+   `find_attractions` for useful indoor alternatives; each lookup appears separately in the chat.
 
 Follow-up to test memory: after query 2, ask `Is the second one you listed registered? Double check it.`
 
@@ -34,11 +35,11 @@ District filtering narrows an area; it does not confirm walking distance or trav
 ### Trip context within a session
 
 Each session saves the user's city, area, travel dates, departure point, budget, interests,
-dietary needs, outing duration/setting, and question preference separately from the last 20 user turns.
+dietary needs, outing duration/setting and clock window, and question preference separately from the last 20 user turns.
 `trip_context.py` extracts changes using a typed SDK output and `prompts/trip_context.txt`;
 each saved value includes an exact supporting quote from the current user message. Missing
 details, explicit "no preference", and withdrawn details are distinct. Latest corrections
-replace old values; changing city clears the old area and outing duration, while unrelated preferences remain.
+replace old values; changing city clears the old area, outing duration, and clock window, while unrelated preferences remain.
 Budget values retain the stated currency and scope; extraction does not convert prices.
 
 The blocking input guardrail screens the message before extraction, then the main agent's
@@ -76,7 +77,7 @@ they do not establish whether Gemini follows this policy.
 | `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
 | `find_attractions` | Sights by city, keyword, district, interests, indoor/outdoor preference, and available time. Python returns a ranked pick, alternatives, estimated visit durations, nearby groups, and a suggested outing. Name lookups tolerate different wording and report closed places. `style: local` favors local appeal; broad default searches also include local gems. Only places named in the answer are pinned | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
-| `typhoon_backup_plan` ⭐ | Forecast (weather, rain chance, temperatures) for a date within about a week plus active typhoon warnings; on a typhoon warning or 70%+ rain, up to 3 indoor backups. Further dates get a seasonal note | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`), backups via TDX |
+| `typhoon_backup_plan` ⭐ | Compares forecast periods for the outing window and recommends outdoor/flexible/indoor strategies. Returns weather only; the agent decides whether to call `find_attractions` separately. Current warnings remain separate from future forecasts | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`) |
 
 ⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
 
@@ -91,14 +92,46 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 | Lodging | Registration, licensed type, district, certification, structured reference rates, ranked pick and trade-offs | Registration is not a quality rating; reference starts do not verify every room or travel date; no live rooms/booking prices |
 | Rail | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
 | Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
-| Weather | Forecast dates, rain chance, temperature, warning, backup listings | Limited forecast horizon; seasonal notes are not forecasts and warnings are current |
+| Weather | Time-window comparison, rain chance, temperature, current warning, activity strategy | Forecast periods are broad, not hourly; rain probabilities can be absent; warnings are current; place searches are separate |
 | Exchange | Rate, rate date, converted amount, sampled historical comparison | Mid-market snapshot; no actual cash-counter quote or travel prices; average uses weekly samples |
 
 Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
 as **unavailable**. Source claims are **reported**, not independently verified. Compare only
 available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
-Food, attractions, lodging, and rail now include explicit comparison fields; the other tools retain their existing
+Food, attractions, lodging, rail, and weather now include explicit comparison fields; the other tools retain their existing
 domain outputs. Existing `/chat` fields and map behavior are preserved.
+
+### Weather assessment and tool coordination
+
+`typhoon_backup_plan` accepts `available_minutes` (15–720) and same-day
+`start_time`/`end_time` in Taiwan `HH:MM`. The default window is 08:00–20:00;
+an explicit start plus duration supplies the end when omitted. Session context retains the
+outing duration and clock window on follow-ups. Train windows are not sightseeing windows.
+
+`forecast` keeps the daily summary; `comparison` considers only intervals overlapping the outing,
+including overnight periods starting the previous day. Weather elements align by timestamp,
+not array index. Below 40% rain favors outdoor activities, 40–69% keeps plans flexible,
+and 70%+ favors indoor activities. These are app planning heuristics, not CWA warning levels
+or estimates of rainfall intensity. Different periods can yield a split plan; missing values
+and incomplete coverage never become an all-clear. The [CWA product specification](https://opendata.cwa.gov.tw/opendatadoc/Forecast/F-D0047-001_093.pdf)
+describes 12-hour weekly intervals and rain probabilities limited to the first three days;
+the tool does not invent hourly probabilities for a shorter outing.
+
+The weather tool performs no attraction or TDX lookup and names no places. The agent decides
+whether an attraction search would help, based on the request, forecast, and saved preferences.
+When useful, it calls `find_attractions` separately with the known district, interests, indoor
+setting for a rainy backup, and `comparison.available_minutes` (capped to the explicit window).
+Both calls appear in `/chat.tool_calls` and the chat display. Weather-only requests can end
+after the weather call; previously retrieved attraction results can also be reused.
+The attraction tool supplies its own comparison, estimated outing timeline, and sources.
+The indoor outing is an alternative for the window, not extra stops added to an outdoor plan.
+Failed attraction lookups leave the weather result available. The legacy `backup_spots` field
+stays empty; attraction pins come from the separate search using the existing map behavior.
+
+Current warnings are separate from future-date forecasts. A warning covering today's city
+sets `postpone_outing`, consistent with [CWA typhoon precautions](https://www.cwa.gov.tw/V8/C/K/Encyclopedia/typhoon/typhoon.pdf).
+An unavailable warning feed is distinct from no warning. Dates beyond the forecast get a
+seasonal note; gaps within the near-term feed are reported as missing forecasts.
 
 ### Lodging preference comparisons
 
