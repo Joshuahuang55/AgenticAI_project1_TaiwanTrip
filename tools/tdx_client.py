@@ -6,8 +6,11 @@ Every TDX-backed tool goes through `tdx_get`. It never raises: on failure it ret
 
 import os
 import time
+import threading
+from functools import wraps
 
 import requests
+from tools.freshness import observe
 
 TOKEN_URL = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
 API_BASE = "https://tdx.transportdata.tw/api"
@@ -16,6 +19,20 @@ CACHE_TTL = 6 * 60 * 60  # Avoid repeated requests to TDX's rate-limited APIs.
 
 _token = {"value": None, "expires_at": 0.0}
 _cache: dict[tuple, tuple[float, list | dict]] = {}
+_request_lock = threading.RLock()
+
+
+def serialized(function):
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with _request_lock:
+            return function(*args, **kwargs)
+    return locked
+
+
+def cached_result(path, cached, *, stale=False):
+    observe("TDX " + path, cached[0], CACHE_TTL, stale=stale)
+    return cached[1]
 
 # English (and common spellings) -> the county/city name TDX uses in PostalAddress/City.
 CITIES = {
@@ -62,6 +79,7 @@ def odata_quote(text: str) -> str:
     return text.replace("'", "''")
 
 
+@serialized
 def _get_token() -> str | None:
     if _token["value"] and time.time() < _token["expires_at"] - 60:
         return _token["value"]
@@ -80,6 +98,7 @@ def _get_token() -> str | None:
     return _token["value"]
 
 
+@serialized
 def tdx_get(path: str, params: dict) -> list | dict:
     """GET a TDX endpoint (path relative to /api, e.g. 'tourism/service/odata/V2/Tourism/Hotel').
 
@@ -89,7 +108,7 @@ def tdx_get(path: str, params: dict) -> list | dict:
     key = (path, tuple(sorted(params.items())))
     cached = _cache.get(key)
     if cached and time.time() - cached[0] < CACHE_TTL:
-        return cached[1]
+        return cached_result(path, cached)
 
     try:
         token = _get_token()
@@ -107,12 +126,12 @@ def tdx_get(path: str, params: dict) -> list | dict:
             )
             if resp.status_code != 429:
                 break
-            wait = int(resp.headers.get("ratelimit-reset", "60"))
+            wait = max(0, int(resp.headers.get("ratelimit-reset", "60")))
             if attempt == 0 and wait <= 8:
                 time.sleep(wait + 1)
                 continue
             if cached:
-                return cached[1]
+                return cached_result(path, cached, stale=True)
             return {
                 "error": f"TDX rate limit reached (free tier). Resets in about {wait} seconds.",
                 "hint": "Answer with what you already know, and tell the user they can ask again in a minute.",
@@ -121,7 +140,7 @@ def tdx_get(path: str, params: dict) -> list | dict:
         body = resp.json()
     except (requests.RequestException, ValueError, KeyError) as e:
         if cached:
-            return cached[1]
+            return cached_result(path, cached, stale=True)
         return {
             "error": f"TDX request failed: {type(e).__name__}",
             "hint": "The TDX data service is unreachable. Tell the user and suggest trying again shortly.",
@@ -129,4 +148,5 @@ def tdx_get(path: str, params: dict) -> list | dict:
 
     records = body.get("value", body) if isinstance(body, dict) else body
     _cache[key] = (time.time(), records)
+    observe("TDX " + path, _cache[key][0], CACHE_TTL)
     return records

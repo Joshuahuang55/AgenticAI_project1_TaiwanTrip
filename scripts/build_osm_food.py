@@ -7,6 +7,7 @@ restaurant within TOWN_KM (about 1 minute; a place near a border can get its nei
 The official restaurant register lists none in Taipei or Kaohsiung; OpenStreetMap lists thousands.
 Kept per place: name, English and Japanese names, coordinates, kind, cuisine, opening hours, and the
 street address when OSM has one (addr:full, or addr:street and addr:housenumber).
+Also retain diet:vegetarian/diet:vegan and distinguish reported districts from estimated ones.
 
 Data © OpenStreetMap contributors, under the Open Database License (ODbL 1.0):
 https://www.openstreetmap.org/copyright. This file is a derived database and is shared under the ODbL.
@@ -40,7 +41,8 @@ nwr["amenity"~"^(restaurant|fast_food|cafe|food_court|ice_cream)$"]["name"](area
 out center tags;"""
 # Short keys keep the file small: about 100,000 places.
 TOWN_KM = 1.5
-FIELDS = {"name": "n", "name:en": "en", "name:ja": "ja", "cuisine": "c", "opening_hours": "h"}
+FIELDS = {"name": "n", "name:en": "en", "name:ja": "ja", "cuisine": "c", "opening_hours": "h",
+          "diet:vegetarian": "dv", "diet:vegan": "dg"}
 
 
 def address(tags: dict) -> str | None:
@@ -67,6 +69,8 @@ def place(element: dict, county: str) -> dict | None:
     out.update({short: tags[key] for key, short in FIELDS.items() if tags.get(key)})
     if addr := address(tags):
         out["a"] = addr
+    if tags.get("addr:district"):
+        out.update(t=tags["addr:district"], ts="reported")
     return out
 
 
@@ -81,7 +85,11 @@ def assign_towns(places: list[dict], official: list[dict]) -> int:
                 (r["PositionLat"], r["PositionLon"], addr.get("City"), addr["Town"]))
     done = 0
     for p in places:
+        if p.get("t") and p.get("ts") == "reported":
+            done += 1
+            continue
         p.pop("t", None)
+        p.pop("ts", None)
         cy, cx = round(p["lat"], 2), round(p["lon"], 2)
         best = None
         for dy in (-0.02, -0.01, 0, 0.01, 0.02):
@@ -94,6 +102,7 @@ def assign_towns(places: list[dict], official: list[dict]) -> int:
                         best = (d, town)
         if best:
             p["t"] = best[1]
+            p["ts"] = "estimated"
             done += 1
     return done
 

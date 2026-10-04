@@ -23,6 +23,7 @@ from pathlib import Path
 import requests
 
 from tools.gov_tls import gov_session
+from tools.freshness import observe
 
 BASE_URL = "https://media.taiwan.net.tw/XMLReleaseAll_public/v2.0/Zh_tw/"
 # dataset -> (zip file, {part: JSON file in the zip})
@@ -124,6 +125,8 @@ def _parts(dataset: str) -> dict[str, list] | None:
             _loading.add(dataset)
     if start:
         _start_refresh(dataset)
+    if entry:
+        observe("Tourism " + dataset, entry["loaded_at"], REFRESH_SECONDS)
     return entry["parts"] if entry else None
 
 
