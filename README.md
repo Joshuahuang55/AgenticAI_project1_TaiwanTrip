@@ -44,7 +44,8 @@ Budget values retain the stated currency and scope; extraction does not convert 
 The blocking input guardrail screens the message before extraction, then the main agent's
 dynamic instructions include the updated context. This adds one model call per accepted
 message, with a 10-second extraction timeout. Invalid output or extraction failure retains
-the previous context and lets the conversation continue. Failed/rejected main runs roll back
+the previous context and lets the conversation continue. Provider HTTP 429 stops the turn early
+with a busy/rate-limit message; it does not continue into more model calls. Failed/rejected main runs roll back
 preference changes. Evidence checks validate provenance and format; semantic extraction still
 depends on the model. Requests within one session run in order to avoid overlapping updates.
 
@@ -69,7 +70,7 @@ they do not establish whether Gemini follows this policy.
 
 | Tool | What it does | Data source |
 |---|---|---|
-| `legal_stay_check` ⭐ | Checks if a hotel/B&B is registered, or lists registered stays (Taiwan Host certified first, optional price cap) | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
+| `legal_stay_check` ⭐ | Checks registration, or compares stays by district, licensed type, and reported starting rates. Python ranks a larger candidate pool before returning a recommended stay and alternatives; budget-friendly requests need no invented price cap | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
 | `find_local_food` | Restaurants by dish and night markets; preference evidence first when criteria are supplied, then awards/local score. Returns sourced facts, missing fields, and comparison checks; `style: local` for locals' favorites | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
 | `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
@@ -87,7 +88,7 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 |---|---|---|
 | Food | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated |
 | Attractions | Categories, listed details, interest/setting fit, estimated visit duration, ranked comparison and nearby outing | Planning heuristics are estimates; coordinate distances are not walking routes; hours/fees can be missing |
-| Lodging | Registration, license, address, certification, owner-reported price range | Registration is not a quality rating; no live rooms or booking prices |
+| Lodging | Registration, licensed type, district, certification, structured reference rates, ranked pick and trade-offs | Registration is not a quality rating; reference starts do not verify every room or travel date; no live rooms/booking prices |
 | Rail | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
 | Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
 | Weather | Forecast dates, rain chance, temperature, warning, backup listings | Limited forecast horizon; seasonal notes are not forecasts and warnings are current |
@@ -96,8 +97,29 @@ Attractions and restaurants come from the Tourism Administration's daily open-da
 Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
 as **unavailable**. Source claims are **reported**, not independently verified. Compare only
 available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
-Food, attractions, and rail now include explicit comparison fields; the other tools retain their existing
+Food, attractions, lodging, and rail now include explicit comparison fields; the other tools retain their existing
 domain outputs. Existing `/chat` fields and map behavior are preserved.
+
+### Lodging preference comparisons
+
+List mode supports `district` (Traditional Chinese), `type` (`hotel`/`bnb`),
+`price_preference` (`budget`/`any`), and `max_price_twd` for a stated numeric nightly budget.
+"Cheap" uses `budget`, which ranks by lower reported starting rates without inventing a cap.
+The tool makes one cached TDX query for up to 500 candidates, then filters, deduplicates,
+and ranks in Python before returning up to `limit` stays (1–10, default 5).
+An explicit recommendation count is applied by the SDK wrapper when recognized, even if the
+model omits `limit`; guests, nights, star ratings, and prices are not result counts. Numeric budgets
+exclude known higher starting rates; absent/zero/invalid rates remain unknown and eligible.
+Known lower starting rates rank before missing rates for budget requests; certification breaks
+price ties. Without a price preference, Taiwan Host certification leads the ordering.
+
+`stays` preserves existing UI/map fields and adds `district`, `price_range_twd`, and
+`preference_match`. `comparison` provides the recommended name, reasons, reference-price
+differences, and candidate counts. A pool reaching 500 may be incomplete; recommendations are
+among returned candidates. District matches do not establish proximity to a landmark or MRT.
+Prices are owner-reported reference ranges, not booking quotes; a starting rate within a cap
+does not mean every room or date qualifies. Missing rates do not prevent useful suggestions.
+Registration check mode retains its name matching and nationwide fallback behavior.
 
 ### Attraction preference comparisons
 

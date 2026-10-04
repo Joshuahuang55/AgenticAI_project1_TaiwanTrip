@@ -1,16 +1,13 @@
-"""legal_stay_check (original tool, member C): is a hotel/B&B registered with Taiwan's Tourism Administration?
-
-Taiwan has many unregistered B&Bs listed on booking sites. Staying in one means no
-fire-safety inspection and no insurance if something goes wrong. The Tourism
-Administration's register (via TDX) is the ground truth.
-"""
+"""Check lodging registration or compare stays from the Tourism Administration's register."""
 
 import json
 import re
 
+from tools import lodging_preferences
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
 HOTEL_PATH = "tourism/service/odata/V2/Tourism/Hotel"
+CANDIDATE_LIMIT = 500  # TDX's maximum $top; one cached request, no pagination probes.
 
 # TDX HotelClasses codes -> what the license means for a traveler.
 LICENSE_TYPES = {
@@ -38,15 +35,18 @@ def _summarize(h: dict) -> dict:
     addr = h.get("PostalAddress") or {}
     phones = [t["Tel"] for t in h.get("Telephones") or [] if t.get("Tel")]
     classes = h.get("HotelClasses") or []
-    low, high = h.get("LowestPrice") or None, h.get("CeilingPrice") or None
+    prices = lodging_preferences.price_range(h)
+    low, high = prices["minimum"], prices["maximum"]
     return {
         "name": h.get("HotelName"),
         "license_number": h.get("HotelLicenseNumber"),
         "license_type": LICENSE_TYPES.get(classes[0], "Registered lodging") if classes else "Registered lodging",
         "address": f"{addr.get('City', '')}{addr.get('Town', '')}{addr.get('StreetAddress', '')}",
+        "district": addr.get("Town"),
         "phone": phones[0] if phones else None,
         "reference_price_twd": f"{low}-{high}" if low and high and low != high else low,
-        "taiwan_host_certified": bool(h.get("TaiwanHost")),
+        "price_range_twd": prices,
+        "taiwan_host_certified": lodging_preferences.certified(h),
         "stars": h.get("HotelStars") or None,
         "website": h.get("WebsiteUrl") or None,
         "lat": h.get("PositionLat"),
@@ -68,6 +68,8 @@ def legal_stay_check(
     type: str | None = None,
     max_price_twd: int | None = None,
     limit: int = 5,
+    district: str | None = None,
+    price_preference: str = "any",
 ) -> str:
     place = resolve_city(city)
     if place is None:
@@ -115,35 +117,73 @@ def legal_stay_check(
         }, ensure_ascii=False)
 
     # --- List mode: recommend registered stays ---
+    try:
+        lodging_preferences.validate(district, price_preference, max_price_twd)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc), "hint": "Correct the lodging preferences and retry."})
+    town = district.strip() if district is not None else town
     if type and type not in TYPE_CLASSES:
         return json.dumps({"error": f"Unknown type '{type}'.", "hint": "Use 'hotel', 'bnb', or omit it."})
     filters = [f"PostalAddress/City eq '{county}'", "ServiceStatus eq 1"]
     if town:
-        filters.append(f"PostalAddress/Town eq '{town}'")
+        filters.append(f"PostalAddress/Town eq '{odata_quote(town)}'")
     if type:
         filters.append("(" + " or ".join(f"HotelClasses/any(c: c eq {c})" for c in TYPE_CLASSES[type]) + ")")
-    if max_price_twd:
-        filters.append(f"LowestPrice gt 0 and LowestPrice le {int(max_price_twd)}")
+    if max_price_twd is not None:
+        # Keep absent/zero rates as suggestions; do not claim they meet the booking budget.
+        filters.append(f"(LowestPrice le {max_price_twd} or LowestPrice eq null)")
     rows = tdx_get(HOTEL_PATH, {
         "$filter": " and ".join(filters),
-        # Taiwan Host (好客民宿) certified places first. Not by stars: that surfaces luxury hotels.
+        # Retrieve a pool, then rank by the traveler's preferences before limiting the answer.
         "$orderby": "TaiwanHost desc",
-        "$top": limit,
+        "$top": CANDIDATE_LIMIT,
     })
     if isinstance(rows, dict):
         return json.dumps(rows, ensure_ascii=False)
+    fetched_count = len(rows)
+    selected, seen = [], set()
+    for row in rows:
+        address = row.get("PostalAddress") or {}
+        if row.get("ServiceStatus") is not None and row["ServiceStatus"] != 1:
+            continue
+        if address.get("City") and address["City"] != county:
+            continue
+        if town and address.get("Town") != town:
+            continue
+        if type and not set(row.get("HotelClasses") or []) & set(TYPE_CLASSES[type]):
+            continue
+        minimum = lodging_preferences.price_range(row)["minimum"]
+        if max_price_twd is not None and minimum is not None and minimum > max_price_twd:
+            continue
+        key = row.get("HotelID") or (row.get("HotelName"), row.get("HotelLicenseNumber"),
+                                     address.get("Town"), address.get("StreetAddress"))
+        if key not in seen:
+            seen.add(key)
+            selected.append(row)
+    rows = lodging_preferences.rank(selected, price_preference, max_price_twd)
+    comparison = lodging_preferences.compare(rows[:limit], town, price_preference, max_price_twd,
+                                              fetched_count, CANDIDATE_LIMIT, len(rows))
+    preferences = {"district": town, "type": type, "price_preference": price_preference,
+                   "max_price_twd": max_price_twd}
     if not rows:
         return json.dumps({
             "mode": "list",
             "city": county,
+            "town": town,
+            "preferences": preferences,
+            "comparison": comparison,
             "stays": [],
-            "hint": "No registered stays match. Drop max_price_twd or type, or try a nearby city.",
+            "hint": "No returned registered stays match. Offer a broader district, type, or budget search; "
+                    "do not silently relax the user's criteria.",
         }, ensure_ascii=False)
     return json.dumps({
         "mode": "list",
         "city": county,
         "town": town,
-        "stays": [_summarize(h) for h in rows],
+        "preferences": preferences,
+        "comparison": comparison,
+        "stays": [dict(_summarize(h), preference_match=lodging_preferences.fit(h, town, max_price_twd))
+                  for h in rows[:limit]],
         "note": "Prices are the owner-reported reference range, not live availability. Book on a booking site.",
         "source": "Taiwan Tourism Administration lodging register via TDX",
     }, ensure_ascii=False)
@@ -158,7 +198,8 @@ SCHEMA = {
             "Administration, or list registered stays in a city. Use this for ANY lodging question: "
             "never recommend a stay that this tool did not return. With `name`, checks that place "
             "(returns license number, type, address, phone). Without `name`, lists registered stays, "
-            "Taiwan Host (好客民宿) certified ones first, with owner-reported reference prices in TWD. "
+            "ranked by district, type and budget preferences before certification, with owner-reported "
+            "reference prices, a recommended stay and alternatives. Missing rates allow suggestions. "
             "No live availability or booking."
         ),
         "parameters": {
@@ -182,9 +223,18 @@ SCHEMA = {
                 },
                 "max_price_twd": {
                     "type": "integer",
-                    "description": "List mode only: max reference nightly price in TWD. Set it whenever the user "
-                                   "says cheap/budget or gives a price; convert other currencies with twd_exchange first.",
+                    "minimum": 1,
+                    "description": "List mode only: user-stated numeric nightly reference budget in TWD. "
+                                   "Never invent a cap for cheap/budget alone; use price_preference instead. "
+                                   "Convert a stated foreign-currency budget with twd_exchange first. "
+                                   "Starting reference rates are not booking quotes; missing rates remain eligible.",
                 },
+                "district": {"type": "string", "description": "List mode only: requested district in Traditional Chinese, "
+                             "e.g. 萬華區 or 中西區, from this message or session context. A district match "
+                             "does not verify proximity to an MRT station or landmark."},
+                "price_preference": {"type": "string", "enum": list(lodging_preferences.PRICE_PREFERENCES),
+                                     "description": "List mode only: budget for cheap/budget-friendly requests, "
+                                                    "ranking by lower reported starting rates without an invented cap; default any."},
                 "limit": {"type": "integer", "description": "List mode only: how many stays (1-10, default 5)."},
             },
             "required": ["city"],

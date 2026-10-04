@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 
+import litellm
 from agents import (
     Agent,
     GuardrailFunctionOutput,
@@ -112,7 +113,7 @@ CLASSIFIER_SAFETY = [{"category": f"HARM_CATEGORY_{c}", "threshold": "OFF"}
 async def classify(text: str, last_reply: str, model, settings: ModelSettings) -> str:
     """ALLOW, OFF_TOPIC, INJECTION, or HARMFUL.
 
-    A refusal still means HARMFUL. Any other failure allows the message: the main prompt and
+    A refusal still means HARMFUL. Rate limits stop the turn. Other failures allow the message: the main prompt and
     Gemini's safety filter on the main agent still apply.
     """
     prompt = f"Assistant's last message:\n{last_reply[:500] or '(none)'}\n\nNew user message:\n{text}"
@@ -122,6 +123,8 @@ async def classify(text: str, last_reply: str, model, settings: ModelSettings) -
         result = await Runner.run(checker, prompt, max_turns=1)
     except ModelRefusalError:
         return "HARMFUL"
+    except litellm.RateLimitError:
+        raise  # Do not add extractor/main requests when the provider is already rejecting calls.
     except Exception:
         return "ALLOW"
     verdict = str(result.final_output or "").strip().upper()

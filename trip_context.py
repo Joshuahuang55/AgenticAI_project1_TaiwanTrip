@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import litellm
 from agents import Agent, Runner
 from pydantic import BaseModel, Field
 
@@ -112,7 +113,7 @@ def taiwan_today() -> dt.date:
 
 async def extract_trip_context(current: TripContext, message: str, last_reply: str,
                                model, settings) -> TripContext:
-    """One bounded model call. Failure leaves preferences intact and does not stop the chat."""
+    """One bounded call; ordinary failures retain preferences, provider rate limits stop the turn."""
     payload = json.dumps({"today_in_taiwan": taiwan_today().isoformat(),
                           "saved_preferences": current.as_dict(),
                           "last_assistant_message": last_reply[:2000],
@@ -123,6 +124,8 @@ async def extract_trip_context(current: TripContext, message: str, last_reply: s
         if not isinstance(result.final_output, TripUpdates):
             raise ValueError("Unexpected trip context output")
         return current.apply(result.final_output, message)
+    except litellm.RateLimitError:
+        raise
     except Exception:
         # Do not put user preferences or provider errors into logs.
         log.warning("Trip context extraction failed; retaining previous preferences")

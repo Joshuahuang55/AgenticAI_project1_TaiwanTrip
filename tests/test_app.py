@@ -70,6 +70,18 @@ def test_tool_call_runs_and_is_reported(model, monkeypatch):
                                "result": json.dumps({"rate": 32.0, "args": {"amount": 100}})}]
 
 
+def test_lodging_requested_count_is_applied_when_model_omits_limit(model, monkeypatch):
+    received = []
+    def fake(name, args):
+        received.append(dict(args))
+        return json.dumps({"stays": []})
+    monkeypatch.setattr(app, "run_tool", fake)
+    model([[_call("legal_stay_check", '{"city":"Taipei","price_preference":"budget"}')], [_text("Done.")]])
+    result = _chat("Recommend two stays in Taipei.")
+    assert received[0]["limit"] == 2
+    assert result.tool_calls[0]["args"]["limit"] == 2
+
+
 def test_malformed_tool_arguments_still_get_a_tool_reply(model):
     fake = model([[_call("twd_exchange", "{not json")], [_text("Done.")]])
     out = _chat("hi")
@@ -85,6 +97,35 @@ def test_history_carries_over_between_turns(model):
     second = _chat("and again", first.session_id)
     assert second.response == "Again!" and second.session_id == first.session_id
     assert [i.get("content") for i in fake.main_inputs[1] if i.get("role") == "user"] == ["hi", "and again"]
+
+
+@pytest.mark.parametrize("failed_phase,expected_calls", [("scope", ["scope"]),
+                                                       ("context", ["scope", "context"]),
+                                                       ("main", ["scope", "context", "main"])])
+def test_provider_rate_limit_stops_turn_and_preserves_session(model, monkeypatch, failed_phase, expected_calls):
+    fake = model([[_text("Taipei suggestions.")], [_text("Should not finish.")]], context_updates=[
+        [{"field": "city", "operation": "set", "value": "Taipei", "evidence": "Taipei"}],
+        [{"field": "city", "operation": "set", "value": "Tainan", "evidence": "Tainan"}],
+    ])
+    first = _chat("Taipei")
+    state = app.sessions[first.session_id]
+    old_history, old_preferences = list(state.history), state.trip.as_dict()
+    original = fake.get_response
+    called = []
+    async def fail(system_instructions, *args, **kwargs):
+        phase = ("scope" if system_instructions == guardrails.SCOPE_CHECKER.instructions else
+                 "context" if system_instructions == trip_context.EXTRACTOR_PROMPT else "main")
+        called.append(phase)
+        if phase == failed_phase:
+            raise app.litellm.RateLimitError("Resource exhausted", llm_provider="vertex_ai",
+                                           model="gemini-3.5-flash-lite")
+        return await original(system_instructions, *args, **kwargs)
+    monkeypatch.setattr(fake, "get_response", fail)
+    result = _chat("Tainan", first.session_id)
+    assert result.response == app.MODEL_RATE_LIMIT_MESSAGE
+    assert result.tool_calls == [] and result.map_pins == []
+    assert called == expected_calls  # No extractor/main requests after an earlier 429.
+    assert state.history == old_history and state.trip.as_dict() == old_preferences
 
 
 @pytest.mark.parametrize("verdict, reason", [("INJECTION", "injection"), ("OFF_TOPIC", "off_topic")])
