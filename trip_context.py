@@ -13,6 +13,7 @@ import litellm
 from agents import Agent, Runner
 from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
+from planning_context import PlanningChoice, bounded_excerpt
 
 log = logging.getLogger("taiwan_trip")
 TripField = Literal["city", "area", "start_date", "end_date", "departure_point", "budget",
@@ -29,6 +30,7 @@ class PreferenceUpdate(BaseModel):
 
 class TripUpdates(BaseModel):
     updates: list[PreferenceUpdate] = Field(default_factory=list, max_length=13)
+    choices: list[PlanningChoice] = Field(default_factory=list, max_length=6)
 
 
 @dataclass(frozen=True)
@@ -134,19 +136,24 @@ def taiwan_today() -> dt.date:
 
 
 async def extract_trip_context(current: TripContext, message: str, last_reply: str,
-                               model, settings) -> TripContext:
+                               model, settings, planning=None) -> TripContext:
     """One bounded call; ordinary failures retain preferences, provider rate limits stop the turn."""
     payload = json.dumps({"today_in_taiwan": taiwan_today().isoformat(),
                           "saved_preferences": current.as_dict(),
-                          "last_assistant_message": last_reply[:2000],
+                          "last_assistant_message": bounded_excerpt(last_reply, 2000),
                           "new_user_message": message}, ensure_ascii=False)
+    if planning is not None:
+        payload = json.dumps({**json.loads(payload), "planning_context": planning.as_dict()}, ensure_ascii=False)
     settings = replace(settings, reasoning=Reasoning(effort="minimal"))
     extractor = EXTRACTOR.clone(model=model, model_settings=settings)
     try:
         result = await asyncio.wait_for(Runner.run(extractor, payload, max_turns=1), timeout=10)
         if not isinstance(result.final_output, TripUpdates):
             raise ValueError("Unexpected trip context output")
-        return current.apply(result.final_output, message)
+        updated = current.apply(result.final_output, message)
+        if planning is not None:
+            planning.confirm(result.final_output.choices, message)
+        return updated
     except litellm.RateLimitError:
         raise
     except Exception:

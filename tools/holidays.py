@@ -172,7 +172,8 @@ def crowd_risk_check(start_date: str, end_date: str) -> str:
     if missing:
         return _error(
             f"The official calendar is unavailable for {', '.join(map(str, missing))}.",
-            "Ask for a year with a published calendar; do not guess holiday dates.",
+            "Explain the calendar coverage gap without changing the user's travel dates. "
+            "Continue other planning; do not guess official holiday dates or a calendar-based risk result.",
         )
 
     try:

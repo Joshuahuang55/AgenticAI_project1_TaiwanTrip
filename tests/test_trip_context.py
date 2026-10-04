@@ -287,7 +287,7 @@ def test_extractor_uses_taiwan_date_and_validated_sdk_output(monkeypatch):
     context = asyncio.run(tc.extract_trip_context(tc.TripContext(), "tomorrow", "Which day?", None, app.AGENT.model_settings))
     assert seen["today_in_taiwan"] == "2026-10-03"
     assert context.preferences["start_date"].value == "2026-10-04"
-    assert app.AGENT.model_settings.reasoning.effort == "low"
+    assert app.AGENT.model_settings.reasoning.effort == "medium"
 
 
 def test_invalid_schema_does_not_break_chat(model):

@@ -7,7 +7,7 @@ import ssl
 import pytest
 
 from tools import attractions, weather
-from test_app import _call, _chat, _text, model  # scripted SDK model; no provider requests
+from test_app import _call, _chat, _reply, _text, model  # scripted SDK model; no provider requests
 
 TODAY = dt.datetime.now(weather.TAIPEI).date()
 TOMORROW = TODAY + dt.timedelta(days=1)
@@ -282,7 +282,8 @@ def test_sdk_agent_can_call_attractions_after_weather_and_both_are_visible(fake,
     attraction_args = {"city": "Tainan", "district": "仁德區", "interests": ["art", "nature"], "setting": "indoor", "limit": 3}
     scripted = model([[_call("typhoon_backup_plan", json.dumps(weather_args))],
                       [_call("find_attractions", json.dumps(attraction_args), call_id="c1")],
-                      [_text("With 80% rain, visit Tainan Art Museum (臺南美術館) and the Natural History Museum (自然史博物館).")]],
+                          _reply("With 80% rain, visit Tainan Art Museum and the Natural History Museum.",
+                                 names=[("臺南美術館", "Tainan Art Museum"), ("自然史博物館", "Natural History Museum")])],
                      context_updates=[[{"field": "city", "operation": "set", "value": "Tainan", "evidence": "Tainan"},
                                        {"field": "available_minutes", "operation": "set", "value": "300", "evidence": "five hours"}]])
     result = _chat("Tainan tomorrow, five hours from 10am to 3pm, art and nature around Rende. Check weather and suggest an outing.")

@@ -444,6 +444,12 @@ def _details(county: str, names: list[str], interests=(), setting="any", availab
     return json.dumps(out, ensure_ascii=False)
 
 
+def pins_from_names(names: list[str]) -> list[dict]:
+    """Exact returned listings selected by validated reply references; no text matching."""
+    seen = _seen()
+    return [_summarize(seen[name], {}, {}) for name in dict.fromkeys(names) if name in seen]
+
+
 def pins_from_answer(answer: str) -> list[dict]:
     """Map pins for the places the final answer actually recommends: listings from this session's searches
     whose Chinese name (or the part after the series prefix, e.g. 象山親山步道) appears in the text.

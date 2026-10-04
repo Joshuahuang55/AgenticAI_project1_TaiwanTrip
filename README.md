@@ -32,9 +32,20 @@ reuses details from the same conversation and respects corrections or requests t
 It asks first when required lookup information is missing, such as the date for train schedules.
 District filtering narrows an area; it does not confirm walking distance or travel time.
 
+The answer format follows the task: a comparison or a few suggestions need not become an
+itinerary just because a time budget is known. Tool rankings and estimated outings support
+the agent's decision; it may choose a different returned option for better overall trip fit.
+Optional questions should resolve a useful gap, rather than appear as a standard ending.
+Rough budgets can use labeled assumptions, while returned prices remain distinct from estimates.
+
+For transport beyond the rail tool's coverage, the agent may give general route advice with
+estimated costs/durations. Exact last departures, current fares, and all-night service need
+relevant retrieved information. Source lines name sources from relevant tool results, including
+reused session results; general knowledge is not presented as an official lookup.
+
 ### SDK tool definitions
 
-The main agent uses `gemini-3.5-flash-lite` on Vertex AI with low thinking, configured
+The main agent uses `gemini-3.5-flash-lite` on Vertex AI with medium thinking, configured
 through `ModelSettings.reasoning` in `app.py`. The input classifier and preference
 extractor explicitly use minimal thinking to keep their preprocessing calls fast.
 
@@ -84,6 +95,57 @@ depends on the model. Requests within one session run in order to avoid overlapp
 Context is isolated by `session_id`, survives history trimming, and is removed by **New trip**,
 session eviction, or server restart. It is not a permanent user profile.
 
+### Planning context and SDK hooks
+
+`agent_hooks.py` collects accepted tool results after output checks. `planning_context.py`
+keeps up to 10 compact lookup records: candidate locations, reference prices, weather strategy,
+train times, and suggested outing durations/timelines. Dynamic instructions expose relevant
+city records before the next main-agent call, including follow-ups after history trimming.
+The injected planning summary is capped at 9,000 characters. The active city's records are
+prioritized, with other destinations retained when space permits so a side trip does not
+hide the trip's accommodation base. This remains bounded conversation memory, not a complete
+stored itinerary. Helper agents receive the beginning and end of long replies, preserving
+the latest follow-up question.
+
+Tool-ranked picks, bounded assistant proposal excerpts, and user-confirmed choices are distinct.
+The existing extractor can save explicitly named selections with user evidence; vague agreement
+does not select an alternative. Extraction still depends on the model's interpretation.
+Planning facts do not become user preferences. Failed/rejected turns roll back planning updates;
+the same session isolation, clearing, and eviction rules apply. There are no extra model calls.
+
+Each turn also saves a bounded diagnostic entry (last 20 turns) and writes
+`Agent planning diagnostics` to the server log: main-agent model-call count, tool counts,
+recommended-place counts by kind,
+failed lookups, elapsed time, and flags for missing sightseeing/food results in broad plans,
+identical repeated lookups, or food searches without an available planning area. Recommendation
+counts have no fixed daily threshold; slower visits and travel days can need fewer stops. Logs omit
+chat text, arguments, and result contents. Flags are review signals, not proof an answer is bad;
+hooks do not force tool choices or rewrite answers. `/chat` keeps its existing response format.
+
+To check continuity, ask for a weekend stay/outing, then `Sounds good. What about food?`.
+Also select a returned hotel by name and ask for nearby sights. Inspect actual searches and
+the answer; mocked tests establish the hook/state behavior, not live recommendation quality.
+
+### Structured final replies
+
+The main agent uses SDK `output_type=TravelReply` from `agent_reply.py`: Markdown
+`message`, proposed `places`, and lookup `sources`. Accepted planning records and their
+candidates carry stable reference IDs. The server resolves IDs within the current session,
+ignores unknown references and places whose displayed labels are absent from the answer,
+and renders source footers from referenced result metadata. General advice uses no sources.
+Internal IDs are removed from displayed prose and labels, preserving human-readable names,
+ordinary links, and map references. Session history and proposals keep the cleaned text.
+References identify returned records; they do not independently verify every sentence.
+
+Proposals save explicit recommended/alternative places and their districts alongside a
+bounded text excerpt. These suggestions remain separate from user-confirmed choices.
+Attraction/food map pins use referenced original listing names, so English-only answers
+and follow-ups reusing earlier results can show pins without another lookup.
+The frontend still receives readable `response`, actual `tool_calls`, and `map_pins`;
+JSON replies stay internal. Guardrails inspect the message, helper agents read its text,
+and history keeps cleaned structured replies. Rejected/failed turns clear reply metadata
+and restore the previous planning state. No additional model call is added.
+
 After changing either file in `prompts/`, restart the app and check these conversations:
 
 - `Give me some food recommendations in Taipei.` → recommendations first, then an optional refinement.
@@ -92,7 +154,10 @@ After changing either file in `prompts/`, restart the app and check these conver
   → three tool-backed suggestions without a refinement question.
 - In a new trip, `Find a train from Taipei to Tainan.` → asks for the travel date before a timetable lookup.
 - In a new trip, `Help me plan a cheap weekend in Taipei.` → a base, sightseeing and food
-  in a flexible two-day outline, followed by one useful refinement question.
+  covering the requested duration, with nearby sights/meal ideas and low-cost reasons,
+  followed by one useful refinement question. A weekend normally gets two day sections;
+  `Plan a cheap week in Taipei.` gets seven. Dates become day labels, while short outings
+  use the computed timeline. Stop counts adapt to pace, long visits, transfers and partial days.
 - After a stay/sightseeing plan, `I'll follow your plan. What about food?` → searches food in
   the plan's area and explains how it fits. If multiple bases were offered, it states a provisional
   choice; assistant suggestions remain separate from user-stated preferences.
@@ -202,11 +267,13 @@ Each result includes `planning` and `preference_match`; `comparison` provides th
 name, reasons, alternatives, and nearby groups. Visit-duration ranges and indoor/outdoor labels
 are category/name estimates, separate from reported hours and admission prices. Nearby groups
 require every pair to be within 2 km in a straight line. A time-budgeted `suggested_visit` gives
-an ordered `timeline` of up to three visits, estimated city transfers (20–60 minutes), and a
+an ordered `timeline` with visits limited by time and suitable candidates, estimated city transfers (20–60 minutes), and a
 30-minute break for outings of at least four hours with multiple stops. Transfers may connect
 places beyond the nearby-group radius; unknown coordinates use a 45-minute allowance without
-claiming proximity. Half-day visits can expand within their estimated duration ranges; the tool
-reports planned and remaining minutes rather than adding unrelated stops to fill the budget.
+claiming proximity. Visits use typical category durations rather than automatically expanding
+to consume the budget. The tool reports planned and remaining minutes.
+For a requested itinerary, the agent accounts for remaining time with suitable options, another
+search, or explicit free time and breaks; the candidate limit is not a quota for scheduled stops.
 Time and setting preferences persist within the session; the attraction wrapper restores them
 when omitted on follow-ups. A destination change clears the old outing's time budget.
 It is a planning suggestion, not a checked walking route or date-specific opening-hours itinerary.
@@ -326,6 +393,7 @@ Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID`, `TDX_CLIENT_S
 
 ```
 app.py              routes, session store, Agents SDK agent and tools, sight pins
+agent_reply.py      typed final replies, validated place/source references, source rendering
 trip_context.py     validated user preference updates, separate from bounded chat history
 guardrails.py       input, output, and tool guardrails
 prompts/system.txt  system prompt (with {today} filled in on each turn)

@@ -154,14 +154,14 @@ def _transfer(a, b):
 
 
 def outing(rows, interests, setting, available_minutes):
-    """Build a short sequential outing, allowing city transfers beyond the nearby-group radius."""
+    """Build a time-budgeted outing, allowing city transfers beyond the nearby-group radius."""
     eligible = [r for r in rows if fit(r, interests, setting, available_minutes)["fits_typical_visit"]]
     if eligible and fit(eligible[0], interests, setting, available_minutes)["matched_interests"]:
         eligible = [r for r in eligible if fit(r, interests, setting, available_minutes)["matched_interests"]]
     if setting != "any" and any(profile(r)["setting"] in (setting, "mixed") for r in eligible):
         eligible = [r for r in eligible if profile(r)["setting"] in (setting, "mixed")]
     picked, transfers, total = [], [], 0
-    while eligible and len(picked) < 3:
+    while eligible:
         if picked:
             covered = {i for r in picked for i in profile(r)["interests"]}
             # Complement the first stop's interests, then prefer a short transfer.
@@ -188,17 +188,6 @@ def outing(rows, interests, setting, available_minutes):
     visits = [profile(r)["visit_minutes"]["typical"] for r in picked]
     break_minutes = 30 if len(picked) >= 2 and available_minutes >= 240 else 0
     total += break_minutes
-    # A half-day permits a fuller visit within the category range, rather than one quick stop.
-    if available_minutes >= 240:
-        while total + 5 <= available_minutes:
-            changed = False
-            for index, row in enumerate(picked):
-                if total + 5 <= available_minutes and visits[index] + 5 <= profile(row)["visit_minutes"]["max"]:
-                    visits[index] += 5
-                    total += 5
-                    changed = True
-            if not changed:
-                break
     timeline, elapsed = [], 0
     for index, row in enumerate(picked):
         if index:

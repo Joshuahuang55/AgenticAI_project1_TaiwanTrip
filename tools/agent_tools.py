@@ -151,6 +151,8 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         Return listed details, ranked picks, trade-offs and estimated visit durations. A time
         budget adds an ordered outing with transfer/break allowances. Hours and fees can be absent.
+        Candidate count is not an itinerary stop quota. Consider remaining time when building
+        a full outing; retrieve more suitable places when useful, or explain free time.
         Use for sightseeing within a trip plan. For a dated outing within about seven days,
         check or reuse typhoon_backup_plan first and apply its weather strategy to the setting.
         Pair meals with find_local_food in the planned stops' districts when useful.

@@ -99,7 +99,7 @@ def test_five_hour_indoor_art_and_nature_outing_includes_city_transfer(listings)
     result = search(interests=["art", "nature"], setting="indoor", available_minutes=300)
     plan = result["comparison"]["suggested_visit"]
     assert len(plan["names"]) == 2
-    assert 280 <= plan["estimated_minutes"] <= 300
+    assert 0 < plan["estimated_minutes"] <= 300
     assert plan["estimated_minutes"] + plan["remaining_minutes"] == 300
     assert plan["transfer_allowance_minutes"] == 35
     assert plan["break_minutes"] == 30
@@ -109,8 +109,28 @@ def test_five_hour_indoor_art_and_nature_outing_includes_city_transfer(listings)
     assert all(a["end_minute"] == b["start_minute"] for a, b in zip(timeline, timeline[1:]))
     assert timeline[-1]["end_minute"] == plan["estimated_minutes"]
     assert timeline[0]["relative_time"].startswith("0:00–")
-    assert timeline[-1]["relative_time"].endswith("5:00")
     assert all(60 <= s["estimated_minutes"] <= 120 for s in timeline if s["kind"] == "visit")
+
+
+@pytest.mark.parametrize("budget", [180, 300, 480, 720])
+def test_outing_uses_time_budget_instead_of_fixed_stop_count(budget):
+    rows = [place(str(i), f"城市景點{i}", [], lon=121.51 + i * .001) for i in range(8)]
+    plan = preferences.outing(rows, [], "any", budget)
+    assert plan["estimated_minutes"] + plan["remaining_minutes"] == budget
+    assert 0 <= plan["estimated_minutes"] <= budget
+    assert len(plan["names"]) == len(set(plan["names"]))
+    assert all(a["end_minute"] == b["start_minute"] for a, b in zip(plan["timeline"], plan["timeline"][1:]))
+    assert plan["timeline"][-1]["end_minute"] == plan["estimated_minutes"]
+    if len(plan["names"]) < len(rows):
+        # An otherwise suitable nearby stop should only be omitted when it cannot fit.
+        assert plan["remaining_minutes"] < preferences.profile(rows[0])["visit_minutes"]["typical"] + preferences.TRANSFER_MINUTES
+
+
+def test_spare_time_does_not_automatically_lengthen_visits():
+    plan = preferences.outing([MUSEUM, GALLERY], [], "indoor", 480)
+    visits = [step for step in plan["timeline"] if step["kind"] == "visit"]
+    assert [step["estimated_minutes"] for step in visits] == [90, 90]
+    assert plan["remaining_minutes"] > 0
 
 
 def test_mixed_creative_park_is_optional_indoor_art_stop_not_indoor_nature(listings):

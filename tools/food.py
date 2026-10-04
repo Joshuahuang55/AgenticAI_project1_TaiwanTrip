@@ -352,6 +352,13 @@ def _remember(rows: list[dict], name_key: str) -> None:
     _seen().update({r[name_key]: dict(r, _name_key=name_key) for r in rows if r.get(name_key)})
 
 
+def pins_from_names(names: list[str]) -> list[dict]:
+    """Exact returned listings selected by validated reply references; no text matching."""
+    seen = _seen()
+    return [_summarize(seen[name], seen[name]["_name_key"], pin=True)
+            for name in dict.fromkeys(names) if name in seen]
+
+
 def pins_from_answer(answer: str) -> list[dict]:
     """Map pins for the places the final answer names: this session's shown places whose Chinese name
     appears in the text, longest names first (each match is blanked out, so 鼎泰豐 does not also match
@@ -505,8 +512,8 @@ def find_local_food(city: str, keyword: str | None = None, district: str | None 
                          "then lower reported price bands for exact-budget leads, then keyword and "
                          "awards/local score.",
         "more_candidates": _more_candidates(ranked, picked),
-        "note": "Names and descriptions are in Chinese: translate them for the user and keep the "
-                "Chinese name so they can show it to a taxi driver. Mention awards only as listed in "
+        "note": "Translate names and descriptions into the user's language; exact Chinese names are "
+                "optional for identifying a place locally. Mention awards only as listed in "
                 "`awards`. Recommend relevant returned options and compare useful details. Evidence/status "
                 "labels are internal metadata. For ordinary suggestions, use name/cuisine evidence when tags "
                 "are missing, and combine decision-relevant gaps into one short practical note at the end.",
