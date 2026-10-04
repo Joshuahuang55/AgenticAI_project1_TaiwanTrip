@@ -32,6 +32,26 @@ reuses details from the same conversation and respects corrections or requests t
 It asks first when required lookup information is missing, such as the date for train schedules.
 District filtering narrows an area; it does not confirm walking distance or travel time.
 
+### SDK tool definitions
+
+All seven agent tools are typed `@function_tool` wrappers in `tools/agent_tools.py`.
+The SDK generates descriptions and JSON schemas from their type hints and Google-style
+docstrings. `Literal` defines choices; `Annotated`/Pydantic `Field` defines numeric bounds.
+The plain Python functions and `run_tool` registry remain usable by tests and scripts;
+there are no handwritten `SCHEMA` dictionaries.
+
+The shared adapter executes synchronous work in a worker thread, restores saved outing
+arguments, applies explicit lodging counts, and records the actual arguments/results for
+the chat display. Existing input/output tool guardrails still run. SDK argument errors
+produce recorded `error`/`hint` replies so the agent can correct a call and continue.
+Optional arguments retain defaults with `strict_mode=False` for Gemini; supplied values
+are validated before execution, and unknown arguments are rejected. Conversation policy
+and the choice to combine weather/attraction tools remain in the system prompt.
+
+To add a tool, register its domain function in `tools/__init__.py`, add a decorated typed
+wrapper to `build_tools`, describe arguments in its docstring, and extend the mocked tests.
+Check a fresh app session after description changes; tests do not establish live model choices.
+
 ### Trip context within a session
 
 Each session saves the user's city, area, travel dates, departure point, budget, interests,
@@ -294,7 +314,8 @@ trip_context.py     validated user preference updates, separate from bounded cha
 guardrails.py       input, output, and tool guardrails
 prompts/system.txt  system prompt (with {today} filled in on each turn)
 prompts/trip_context.txt  rules for extracting user-stated trip preferences
-tools/__init__.py   tool registry (TOOLS + run_tool)
+tools/__init__.py   plain Python tool registry (TOOL_MAP + run_tool)
+tools/agent_tools.py typed @function_tool wrappers, generated schemas and execution adapter
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/tourism_data.py daily open-data files for attractions and restaurants, searched in memory
 tools/lodging.py    legal_stay_check

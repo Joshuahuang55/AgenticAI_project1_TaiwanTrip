@@ -294,36 +294,3 @@ def hsr_trip_planner(
     if any(train["fare_twd"] is None for train in picked):
         result["hint"] = "Use the returned times to recommend a train; fare information is missing for some options."
     return json.dumps(result, ensure_ascii=False)
-
-
-SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "hsr_trip_planner",
-        "description": "Compare published high-speed rail (THSR) or Taiwan Railways (TRA) "
-                       "trains between two stations on a date, with adult one-way standard-class fares. "
-                       "Ranks the matching timetable by journey time, fare, departure, or arrival and returns "
-                       "selected trains plus a recommendation and computed trade-offs. Default three options; "
-                       "still returns schedules when fares are missing. This is not live seat availability.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "origin": {"type": "string", "description": "Origin station name in English or Chinese, e.g. Taipei."},
-                "destination": {"type": "string", "description": "Destination station name, e.g. Tainan. "
-                                "For THSR travel to Kaohsiung, use Zuoying or Kaohsiung."},
-                "date": {"type": "string", "description": "Travel date in YYYY-MM-DD format."},
-                "depart_after": {"type": "string", "description": "Optional earliest departure, inclusive, in HH:MM on the travel date."},
-                "depart_before": {"type": "string", "description": "Optional latest departure, inclusive, in HH:MM on the travel date."},
-                "arrive_by": {"type": "string", "description": "Optional arrival deadline, inclusive HH:MM on the same travel date. Omit for next-day arrival deadlines."},
-                "preference": {"type": "string", "enum": list(PREFERENCES),
-                               "description": "Default earliest_arrival: get to the destination soonest; ties favor shorter journeys. "
-                                              "Use fastest for shortest journey, cheapest for lowest known fare, "
-                                              "or earliest_departure only when the user wants to leave as early as possible."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 10,
-                          "description": "Number of options requested, 1-10; default 3."},
-                "rail": {"type": "string", "enum": ["THSR", "TRA"], "description": "Rail service; defaults to THSR."},
-            },
-            "required": ["origin", "destination", "date"],
-        },
-    },
-}

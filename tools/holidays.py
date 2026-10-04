@@ -211,25 +211,3 @@ def crowd_risk_check(start_date: str, end_date: str) -> str:
         },
         "source": SOURCE,
     }, ensure_ascii=False)
-
-
-SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "crowd_risk_check",
-        "description": (
-            "Check Taiwan's official government calendar for days off and estimate travel pressure "
-            "for a trip of up to 30 days. Use for dated Taiwan itineraries or questions about "
-            "holiday travel. Uses historical TRA station entries to calibrate holiday patterns. "
-            "This is a network-level estimate, not live passenger or ticket data."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "start_date": {"type": "string", "description": "First date, YYYY-MM-DD."},
-                "end_date": {"type": "string", "description": "Last date, YYYY-MM-DD; inclusive, at most 30 days."},
-            },
-            "required": ["start_date", "end_date"],
-        },
-    },
-}

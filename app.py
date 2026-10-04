@@ -11,7 +11,6 @@ import litellm
 import uvicorn
 from agents import (
     Agent,
-    FunctionTool,
     InputGuardrailTripwireTriggered,
     MaxTurnsExceeded,
     ModelRefusalError,
@@ -42,8 +41,9 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
 
 load_dotenv()
 
-from tools import TOOLS, run_tool  # noqa: E402  (tools read credentials from the environment)
-from tools import attractions, food, lodging_preferences, tourism_data  # noqa: E402
+from tools import run_tool  # noqa: E402  (tools read credentials from the environment)
+from tools import attractions, food, tourism_data  # noqa: E402
+from tools.agent_tools import build_tools  # noqa: E402
 import guardrails  # noqa: E402
 from guardrails import ChatState  # noqa: E402
 from trip_context import taiwan_today  # noqa: E402
@@ -67,51 +67,6 @@ set_tracing_disabled(True)
 # --- The Agent ---
 
 
-def make_tool(schema: dict) -> FunctionTool:
-    """Wrap a registered tool so the SDK runs it. run_tool keeps the error-and-hint replies."""
-    spec = schema["function"]
-
-    async def invoke(ctx, arguments: str) -> str:
-        # Every tool call needs a tool reply, or the session's history is broken for later turns.
-        try:
-            args = json.loads(arguments or "{}")
-        except json.JSONDecodeError:
-            args = {"_raw": arguments}
-            result = json.dumps({"error": "Arguments were not valid JSON.",
-                                 "hint": "Call the tool again with a JSON object of arguments."})
-        else:
-            if spec["name"] == "legal_stay_check" and isinstance(args, dict) and not args.get("name"):
-                message = ctx.context.user_texts[-1] if ctx.context.user_texts else ""
-                count = lodging_preferences.requested_limit(message)
-                if count is not None:
-                    args["limit"] = count
-            if spec["name"] in ("find_attractions", "typhoon_backup_plan") and isinstance(args, dict):
-                # A preference-only follow-up must keep its outing budget even if the model omits it.
-                keys = ("available_minutes", "setting") if spec["name"] == "find_attractions" else ("available_minutes",)
-                for key in keys:
-                    pref = ctx.context.trip.preferences.get(key)
-                    if key not in args and pref and pref.status == "specified":
-                        args[key] = int(pref.value) if key == "available_minutes" else pref.value
-                if spec["name"] == "typhoon_backup_plan":
-                    for key in ("start_time", "end_time"):
-                        pref = ctx.context.trip.preferences.get("outing_" + key)
-                        if key not in args and pref and pref.status == "specified":
-                            args[key] = pref.value
-            result = await asyncio.to_thread(run_tool, spec["name"], args)
-        ctx.context.tool_calls.append({"id": ctx.tool_call_id, "name": spec["name"], "args": args, "result": result})
-        return result
-
-    return FunctionTool(
-        name=spec["name"],
-        description=spec["description"],
-        params_json_schema=spec["parameters"],
-        on_invoke_tool=invoke,
-        strict_json_schema=False,  # optional arguments; run_tool validates them
-        tool_input_guardrails=[guardrails.check_tool_args],
-        tool_output_guardrails=[guardrails.check_tool_result],
-    )
-
-
 def instructions(ctx, agent) -> str:
     prompt = SYSTEM_PROMPT.format(today=taiwan_today().strftime("%A, %Y-%m-%d"))
     preferences = json.dumps(ctx.context.trip.as_dict(), ensure_ascii=False)
@@ -123,7 +78,7 @@ AGENT = Agent[ChatState](
     instructions=instructions,
     model=LitellmModel("vertex_ai/gemini-3.5-flash-lite"),
     model_settings=ModelSettings(extra_args={"vertex_location": "global", "safety_settings": SAFETY_SETTINGS}),
-    tools=[make_tool(schema) for schema in TOOLS],
+    tools=build_tools(lambda name, args: run_tool(name, args)),
     input_guardrails=[guardrails.check_input],
     output_guardrails=[guardrails.make_output_guardrail(SYSTEM_PROMPT)],
 )

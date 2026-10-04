@@ -202,33 +202,3 @@ def typhoon_backup_plan(city: str, date: str | None = None, available_minutes: i
                 if not warning_applies else "An active warning is not an invitation to visit indoor venues; follow CWA and local closure updates.",
         "source": "Central Weather Administration (CWA)",
     }, ensure_ascii=False)
-
-
-SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "typhoon_backup_plan",
-        "description": (
-            "Check the CWA forecast and active typhoon warnings for a Taiwan city on a date within about "
-            "a week. Compare forecast periods overlapping the outing; return a practical strategy "
-            "for outdoor, flexible, or indoor activities. Returns weather only; use find_attractions "
-            "separately when place recommendations would help. A current typhoon warning recommends "
-            "postponing sightseeing. Dates further out get a seasonal note instead."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "Taiwan city/county in English, e.g. 'Tainan', 'Taipei', 'Hualien'.",
-                },
-                "date": {"type": "string", "description": "Travel date, YYYY-MM-DD. Omit for today."},
-                "available_minutes": {"type": "integer", "minimum": 15, "maximum": 720,
-                                      "description": "Total outing time in minutes, reused on follow-ups."},
-                "start_time": {"type": "string", "description": "Outing start in HH:MM Taiwan time; default 08:00."},
-                "end_time": {"type": "string", "description": "Same-day end in HH:MM; default 20:00, or start plus available_minutes when a start is stated."},
-            },
-            "required": ["city"],
-        },
-    },
-}

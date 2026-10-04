@@ -66,8 +66,8 @@ def test_tool_call_runs_and_is_reported(model, monkeypatch):
     model([[_call("twd_exchange", '{"amount": 100}')], [_text("About 3,200 TWD.")]])
     out = _chat("100 USD in TWD?")
     assert out.response == "About 3,200 TWD."
-    assert out.tool_calls == [{"name": "twd_exchange", "args": {"amount": 100},
-                               "result": json.dumps({"rate": 32.0, "args": {"amount": 100}})}]
+    assert out.tool_calls == [{"name": "twd_exchange", "args": {"amount": 100.0},
+                               "result": json.dumps({"rate": 32.0, "args": {"amount": 100.0}})}]
 
 
 def test_lodging_requested_count_is_applied_when_model_omits_limit(model, monkeypatch):

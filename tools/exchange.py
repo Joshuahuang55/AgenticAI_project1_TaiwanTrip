@@ -90,34 +90,3 @@ def twd_exchange(amount: float, currency: str = "USD", direction: str = "to_twd"
         "tip": "This is the mid-market rate. Cash at bank or airport counters is typically 1-2% worse.",
         "source": "Daily market rates (fawazahmed0/exchange-api)",
     })
-
-
-SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "twd_exchange",
-        "description": (
-            "Convert money between New Taiwan Dollars (TWD) and another currency using today's market "
-            "rate, and compare it with the 30-day average. Use for currency conversions and "
-            "exchange rates when estimating a budget. It does not provide travel prices. "
-            "Data only, not investment advice."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "amount": {"type": "number", "description": "Amount to convert, e.g. 1500."},
-                "currency": {
-                    "type": "string",
-                    "description": "ISO code of the non-TWD currency, e.g. 'USD', 'EUR', 'JPY'. Default USD.",
-                },
-                "direction": {
-                    "type": "string",
-                    "enum": ["to_twd", "from_twd"],
-                    "description": "'to_twd': amount is in `currency`, convert to TWD (default). "
-                                   "'from_twd': amount is in TWD, convert to `currency`.",
-                },
-            },
-            "required": ["amount"],
-        },
-    },
-}

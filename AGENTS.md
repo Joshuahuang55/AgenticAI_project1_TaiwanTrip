@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`app.py` contains FastAPI routes and the OpenAI Agents SDK runtime (Gemini via LiteLLM). `guardrails.py` defines checks and `ChatState`; `trip_context.py` extracts session preferences. `prompts/` holds agent and extraction instructions. `tools/` contains the registry, clients, and tourism loader; `tools/data/` holds bundled ranking/calibration data. `scripts/` builds datasets from sources in `data/`. `static/` is the frontend; `tests/` contains pytest tests.
+`app.py` contains FastAPI routes and the OpenAI Agents SDK runtime (Gemini via LiteLLM). `guardrails.py` defines checks and `ChatState`; `trip_context.py` extracts session preferences. `prompts/` holds agent and extraction instructions. `tools/agent_tools.py` defines typed SDK wrappers; `tools/` also contains the Python registry, clients, and tourism loader. `tools/data/` holds bundled ranking/calibration data. `scripts/` builds datasets from sources in `data/`. `static/` is the frontend; `tests/` contains pytest tests.
 
 ## Build, Test, and Development Commands
 
@@ -23,7 +23,7 @@ Trip preferences outlive trimmed history within the same session. Keep user evid
 
 ## Coding Style & Naming Conventions
 
-Use four spaces and Python `snake_case`. Register tools in `tools/__init__.py`; align schemas, prompt, and README. Return JSON strings with `error` and `hint` for recoverable failures. Follow nearby frontend style; no formatter/linter is configured.
+Use four spaces and Python `snake_case`. Register plain domain functions in `tools/__init__.py` and typed `@function_tool` wrappers in `tools/agent_tools.py`; generate schemas from annotations and Google-style `Args` docstrings, not handwritten `SCHEMA` dictionaries. Keep wrapper signatures/defaults aligned with domain functions, prompt, and README. Use `Literal` for choices and `Annotated`/`Field` for numeric bounds. Gemini wrappers keep `strict_mode=False` for optional arguments; SDK validation errors still need recorded JSON replies. Preserve worker-thread execution, session restoration, and tool guardrails in the shared adapter. Return `error` and `hint` for recoverable failures. Follow nearby frontend style; no formatter/linter is configured.
 
 Food comparisons in `tools/food_preferences.py` prioritize dietary reports and indications before price/awards, keeping unknown facts distinct from reported matches. Preserve evidence/provenance; relative bands never verify exact meal budgets. Present choices and practical comparisons first; keep status labels internal and consolidate relevant gaps into one short note. Pass criteria through name lookups; exclude conflicts and, with explicit `confirmed_only`, unknown matches. District matches do not establish landmark proximity.
 
@@ -37,7 +37,7 @@ Weather comparisons use overlapping CWA intervals, aligning elements by timestam
 
 ## Testing Guidelines
 
-Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for competing/unknown food facts, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists.
+Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_agent_tools.py` for generated schemas and validation, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for food comparisons, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists.
 
 ## Data Maintenance
 
