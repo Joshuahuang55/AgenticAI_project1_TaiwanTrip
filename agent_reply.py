@@ -66,7 +66,7 @@ def clean_reference_text(text: str, names: dict[str, str]) -> str:
 
 def resolve_reply(output: TravelReply, planning) -> ResolvedReply:
     """Invalid references are omitted without withholding the useful answer."""
-    records = list(planning.records.values())
+    records = planning.evidence_records()
     candidates = {candidate["reference_id"]: (record, candidate)
                   for record in records for candidate in record.get("candidates", [])}
     names = {reference: str(candidate.get("name_en") or candidate.get("name") or candidate.get("train_no") or "")

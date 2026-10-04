@@ -7,6 +7,7 @@ result, and the run continues. Unverified links are not worth losing an answer o
 """
 
 import asyncio
+import time
 import json
 import re
 from dataclasses import dataclass, field, replace
@@ -61,6 +62,10 @@ class ChatState:
     turn_metrics: dict = field(default_factory=dict, repr=False)
     reply: ResolvedReply | None = field(default=None, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    last_used: float = field(default_factory=time.monotonic)
+    active_requests: int = 0
+    invalidated: bool = False
+    tasks: set = field(default_factory=set, repr=False, compare=False)
 
     def sources(self) -> str:
         """Text an answer may cite: tool results the model was shown, and what the user typed."""
@@ -128,7 +133,7 @@ async def classify(text: str, last_reply: str, model, settings: ModelSettings) -
                        extra_args={**(settings.extra_args or {}), "safety_settings": CLASSIFIER_SAFETY})
     checker = SCOPE_CHECKER.clone(model=model, model_settings=settings)
     try:
-        result = await Runner.run(checker, prompt, max_turns=1)
+        result = await asyncio.wait_for(Runner.run(checker, prompt, max_turns=1), timeout=10)
     except ModelRefusalError:
         return "HARMFUL"
     except litellm.RateLimitError:

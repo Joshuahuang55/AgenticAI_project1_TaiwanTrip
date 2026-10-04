@@ -39,6 +39,7 @@ def _summarize(h: dict) -> dict:
     low, high = prices["minimum"], prices["maximum"]
     return {
         "name": h.get("HotelName"),
+        "name_en": h.get("HotelNameEn"),
         "license_number": h.get("HotelLicenseNumber"),
         "license_type": LICENSE_TYPES.get(classes[0], "Registered lodging") if classes else "Registered lodging",
         "address": f"{addr.get('City', '')}{addr.get('Town', '')}{addr.get('StreetAddress', '')}",
@@ -104,12 +105,16 @@ def legal_stay_check(
                         "name, ask for the Chinese name or the address, or offer registered alternatives "
                         "by calling legal_stay_check without a name.",
             }, ensure_ascii=False)
-        matches = [_summarize(h) for h in rows[:5]]
+        normalize = lambda text: re.sub(r"[\W_]+", "", NAME_NOISE.sub("", text or "")).casefold()
+        exact = [row for row in rows if normalize(row.get("HotelName")) == normalize(name)]
+        matched = len(exact) == 1 and not searched_elsewhere
+        matches = [_summarize(h) for h in (exact if matched else rows)[:5]]
         return json.dumps({
             "mode": "check",
             "query": name,
             "city": county,
-            "is_registered": True,
+            "is_registered": True if matched else None,
+            "match_status": "matched" if matched else "candidates",
             "note": "Found outside the given city; confirm it is the same place." if searched_elsewhere
                     else "Confirm the address matches the listing: similar names can be different places.",
             "matches": matches,

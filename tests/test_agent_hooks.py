@@ -122,7 +122,7 @@ def test_rejected_tool_output_is_not_added_to_planning_context(model, monkeypatc
     assert app.sessions[first.session_id].diagnostics[-1]["failed_lookups"] == 1
 
 
-def test_failed_turn_rolls_back_new_planning_evidence_and_named_choices(model, monkeypatch):
+def test_failed_turn_retains_lookups_but_rolls_back_named_choices(model, monkeypatch):
     monkeypatch.setattr(app, "run_tool", lambda name, args: json.dumps(STAY))
     model([[_call("legal_stay_check", '{"city":"Taipei"}')], [_text("Sample Inn is an option.")],
            [_call("find_local_food", '{"city":"Taipei"}', "c1")]],
@@ -131,7 +131,11 @@ def test_failed_turn_rolls_back_new_planning_evidence_and_named_choices(model, m
     before = app.sessions[first.session_id].planning.as_dict()
     failed = _chat("Pick Sample Inn.", first.session_id)
     assert "couldn't reach the model" in failed.response
-    assert app.sessions[first.session_id].planning.as_dict() == before
+    after = app.sessions[first.session_id].planning.as_dict()
+    assert after["confirmed_choices"] == before["confirmed_choices"]
+    assert after["assistant_proposals"] == before["assistant_proposals"]
+    assert {record["tool"] for record in after["tool_evidence"]} == {"legal_stay_check", "find_local_food"}
+    assert len(failed.tool_calls) == 1
     assert app.sessions[first.session_id].diagnostics[-1]["status"] == "failed"
 
 

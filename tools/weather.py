@@ -11,6 +11,7 @@ import requests
 from tools import weather_planning
 from tools.gov_tls import gov_session
 from tools.tdx_client import city_choices, resolve_city
+from tools.freshness import observe
 
 CWA_BASE = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/"
 WEEK_FORECAST = "F-D0047-091"  # county forecast, 12-hour periods for about 7 days
@@ -32,7 +33,10 @@ def _cwa_get(dataset: str, params: dict) -> dict:
     """GET a CWA dataset's `records`, or {"error", "hint"}. Never raises; successes are cached."""
     key = (dataset, tuple(sorted(params.items())))
     cached = _cache.get(key)
-    if cached and time.time() - cached[0] < CACHE_TTL:
+    ttl = 5 * 60 if dataset == TYPHOON_WARNING else CACHE_TTL
+    max_age = 15 * 60 if dataset == TYPHOON_WARNING else 2 * 60 * 60
+    if cached and time.time() - cached[0] < ttl:
+        observe("CWA " + dataset, cached[0], ttl)
         return cached[1]
     api_key = os.environ.get("CWA_API_KEY")
     if not api_key:
@@ -43,11 +47,13 @@ def _cwa_get(dataset: str, params: dict) -> dict:
         resp.raise_for_status()
         records = resp.json()["records"]
     except (requests.RequestException, ValueError, KeyError) as e:
-        if cached:
+        if cached and time.time() - cached[0] <= max_age:
+            observe("CWA " + dataset, cached[0], ttl, stale=True)
             return cached[1]
         return {"error": f"CWA request failed: {type(e).__name__}",
                 "hint": "The weather service is unreachable. Tell the user and suggest trying again shortly."}
     _cache[key] = (time.time(), records)
+    observe("CWA " + dataset, _cache[key][0], ttl)
     return records
 
 

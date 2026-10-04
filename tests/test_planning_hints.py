@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import time
 
 import pytest
 
@@ -19,7 +20,7 @@ def state(message, **preferences):
 
 
 def call(name, city="Taipei", result=None, **args):
-    return {"name": name, "args": {"city": city, **args}, "result": json.dumps(result or {"ok": True})}
+    return {"recorded_at": time.time(), "name": name, "args": {"city": city, **args}, "result": json.dumps(result or {"ok": True})}
 
 
 def suggested(value):

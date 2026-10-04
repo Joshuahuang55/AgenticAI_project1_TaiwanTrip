@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 import re
+import time
 
 from trip_context import taiwan_today
 from tools.tdx_client import resolve_city
@@ -82,6 +83,9 @@ def add_next_steps(name, args, result, state):
                     continue
                 outing = (weather.get("comparison") or {}).get("outing_window", {})
                 if not weather.get("error") and (outing.get("start"), outing.get("end")) == expected:
+                    if call not in calls and (time.time() - call.get("recorded_at", 0) > 30 * 60 or
+                            any(item.get("stale") for item in weather.get("data_freshness", []))):
+                        continue
                     checked = True
                     break
             if not checked:

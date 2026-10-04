@@ -10,7 +10,7 @@ and a trip board (map, stay check, budget) is drawn from the tool results.
 1. `I found a cheap B&B in Hualien called "你來花蓮民宿". Is it legal? Can you suggest some registered ones?`
    → `legal_stay_check` twice: confirms license 花蓮縣民宿2170號, then lists registered alternatives on the map.
 2. `I have $1,500 USD for a week. How much is that in TWD, and find me registered B&Bs in Tainan under 3,000 TWD a night.`
-   → `twd_exchange` (with a 30-day comparison), then `legal_stay_check` with a price cap.
+   → `twd_exchange` (with a four-week sampled comparison), then `legal_stay_check` with a price cap.
 3. `What should I eat in Tainan? I want beef soup for breakfast and a night market in the evening.`
    → `find_local_food` for 牛肉湯 and for night markets, including which days Tainan's rotating night markets open.
 4. `I'm taking the train from Taipei to Tainan on Oct 8, 2026. Will the holiday make travel busy?`
@@ -81,7 +81,7 @@ dietary needs, outing duration/setting and clock window, and question preference
 `trip_context.py` extracts changes using a typed SDK output and `prompts/trip_context.txt`;
 each saved value includes an exact supporting quote from the current user message. Missing
 details, explicit "no preference", and withdrawn details are distinct. Latest corrections
-replace old values; changing city clears the old area, outing duration, and clock window, while unrelated preferences remain.
+replace old values; changing city/date clears the old outing window; changing city also clears the area. Clock corrections reconcile the duration, and duration corrections derive a matching boundary. Derived values are marked; saved windows are restored only for the matching city/date. Unrelated preferences remain.
 Budget values retain the stated currency and scope; extraction does not convert prices.
 
 The blocking input guardrail screens the message before extraction, then the main agent's
@@ -93,7 +93,12 @@ preference changes. Evidence checks validate provenance and format; semantic ext
 depends on the model. Requests within one session run in order to avoid overlapping updates.
 
 Context is isolated by `session_id`, survives history trimming, and is removed by **New trip**,
-session eviction, or server restart. It is not a permanent user profile.
+session eviction, six hours of inactivity, or server restart. It is not a permanent user profile.
+The browser restores its bounded transcript and board after refresh while the server session is
+active, and explicitly reports an expired session. Sends are serialized; New trip cancels the
+active server turn before removing its state. Busy states are never evicted. Classifier/extractor
+calls have ten-second deadlines, the whole turn has a 180-second deadline, and the frontend
+request stops after 190 seconds.
 
 ### Planning context and SDK hooks
 
@@ -110,8 +115,13 @@ the latest follow-up question.
 Tool-ranked picks, bounded assistant proposal excerpts, and user-confirmed choices are distinct.
 The existing extractor can save explicitly named selections with user evidence; vague agreement
 does not select an alternative. Extraction still depends on the model's interpretation.
-Planning facts do not become user preferences. Failed/rejected turns roll back planning updates;
-the same session isolation, clearing, and eviction rules apply. There are no extra model calls.
+Planning facts do not become user preferences. Rejected turns roll back planning updates;
+provider failures, timeouts, and tool-round exhaustion retain accepted completed lookups, while
+rolling back preferences, named choices, and unfinished proposals. Partial responses expose
+those real lookups even without a final model answer. There are no extra model calls.
+Lookup keys include all executed criteria; candidate identities are independent of lookup order.
+Selected/proposed evidence survives ordinary lookup eviction in a bounded archive (80 compact records),
+while the injected summary remains capped at 9,000 characters.
 
 Each turn also saves a bounded diagnostic entry (last 20 turns) and writes
 `Agent planning diagnostics` to the server log: main-agent model-call count, tool counts,
@@ -174,7 +184,7 @@ they do not establish whether Gemini follows this policy.
 |---|---|---|
 | `legal_stay_check` ⭐ | Checks registration, or compares stays by district, licensed type, and reported starting rates. Python ranks a larger candidate pool before returning a recommended stay and alternatives; budget-friendly requests need no invented price cap | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
 | `find_local_food` | Restaurants by dish and night markets; preference evidence first when criteria are supplied, then awards/local score. Returns sourced facts, missing fields, and comparison checks; `style: local` for locals' favorites | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
-| `twd_exchange` | Converts to/from TWD and compares with the 30-day average | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
+| `twd_exchange` | Converts to/from TWD and compares weekly samples over four weeks | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 | `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
 | `find_attractions` | Sights by city, keyword, district, interests, indoor/outdoor preference, and available time. Python returns a ranked pick, alternatives, estimated visit durations, nearby groups, and a suggested outing. Name lookups tolerate different wording and report closed places. `style: local` favors local appeal; broad default searches also include local gems. Only places named in the answer are pinned | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
@@ -234,7 +244,34 @@ sets `postpone_outing`, consistent with [CWA typhoon precautions](https://www.cw
 An unavailable warning feed is distinct from no warning. Dates beyond the forecast get a
 seasonal note; gaps within the near-term feed are reported as missing forecasts.
 
+### Trip board and English map
+
+Board results are scoped by route/date/location, including failed and empty searches. Different
+journey legs and weather days can coexist. Proposed pins use stable IDs, English reply labels,
+and recommended/alternative roles; changed proposals replace earlier pins for that city/category.
+
+The Leaflet map uses [OpenFreeMap](https://openfreemap.org/quick_start/) vector tiles through
+MapLibre GL, preferring English names, then Latin names, then local names. No additional API
+key is needed. English coverage depends on OpenStreetMap data; unavailable translations stay
+in the local language. The standard raster map appears immediately while vector assets load asynchronously, so map downloads do not block chat. A 20-second deadline covers scripts, style, and renderer readiness; failures leave a labeled raster fallback. Map/CDN requests go to their public providers.
+
+### Data freshness and exchange comparison
+
+Tool results include `data_freshness` entries with source, UTC retrieval time, age, and stale
+status. TDX and daily tourism caches can retain useful older data during outages; stale board
+cards show retrieval time. Forecast fallback is limited to two hours, and warning fallback to
+15 minutes; fresh warning cache lasts five minutes. Old session weather is marked for refresh.
+
+Exchange comparison uses today plus available 7/14/21/28-day snapshots, not 30 daily rates.
+`sampled_average`, `comparison_method`, and `comparison_status` describe it; legacy `avg_30d`
+and `vs_30d` fields remain for compatibility. Without historical samples, the conversion is
+still returned, while the average/difference are null and comparison is unavailable.
+
 ### Lodging preference comparisons
+
+Check mode distinguishes a unique normalized same-city name (`match_status: matched`,
+`is_registered: true`) from similar or out-of-city records (`candidates`, null). Candidate
+addresses are displayed for disambiguation; an unsuccessful search does not prove illegality.
 
 List mode supports `district` (Traditional Chinese), `type` (`hotel`/`bnb`),
 `price_preference` (`budget`/`any`), and `max_price_twd` for a stated numeric nightly budget.

@@ -38,6 +38,7 @@ class Preference:
     value: str | None
     status: str
     evidence: str
+    derived: bool = False
 
 
 @dataclass
@@ -46,7 +47,15 @@ class TripContext:
 
     def as_dict(self) -> dict:
         return {key: {"value": pref.value, "status": pref.status, "evidence": pref.evidence}
+                | ({"derived": True} if pref.derived else {})
                 for key, pref in self.preferences.items()}
+
+    def outing_matches(self, city=None, date=None):
+        from planning_context import city_key
+        saved_city = self.preferences.get("city")
+        saved_date = self.preferences.get("start_date")
+        return (not city or not saved_city or city_key(city) == city_key(saved_city.value)) and (
+            not date or not saved_date or date == saved_date.value)
 
     def apply(self, updates: TripUpdates, message: str) -> "TripContext":
         """Return a new context; ignore changes without a quote from this user message."""
@@ -89,16 +98,33 @@ class TripContext:
             )
 
         preferences = dict(self.preferences)
+        if "start_date" in accepted and accepted["start_date"].value != (
+                preferences.get("start_date").value if preferences.get("start_date") else None):
+            for key in ("available_minutes", "outing_start_time", "outing_end_time"):
+                preferences.pop(key, None)
         # An area belongs to the active destination city. Keep it only if the message sets both.
         if "city" in accepted:
+            from planning_context import city_key
             old_city = preferences.get("city")
             new_city = accepted["city"]
-            if old_city is None or (old_city.value, old_city.status) != (new_city.value, new_city.status):
+            if old_city is None or (city_key(old_city.value), old_city.status) != (city_key(new_city.value), new_city.status):
                 preferences.pop("area", None)
                 preferences.pop("available_minutes", None)  # The old outing budget belongs to its destination.
                 preferences.pop("outing_start_time", None)
                 preferences.pop("outing_end_time", None)
         preferences.update(accepted)
+        duration = accepted.get("available_minutes")
+        if duration and duration.value and not all(key in accepted for key in ("outing_start_time", "outing_end_time")):
+            anchor = "outing_end_time" if "outing_end_time" in accepted else "outing_start_time"
+            boundary = preferences.get(anchor)
+            other = "outing_start_time" if anchor == "outing_end_time" else "outing_end_time"
+            preferences.pop(other, None)
+            if boundary and boundary.value:
+                clock = dt.datetime.combine(dt.date(2000, 1, 2), dt.time.fromisoformat(boundary.value))
+                adjusted = clock + dt.timedelta(minutes=int(duration.value) * (-1 if anchor == "outing_end_time" else 1))
+                if adjusted.date() == clock.date():
+                    preferences[other] = Preference(adjusted.strftime("%H:%M"), "specified",
+                        "Clock boundary derived from the user's duration.", derived=True)
         outing_start, outing_end = preferences.get("outing_start_time"), preferences.get("outing_end_time")
         if outing_start and outing_end and outing_start.value and outing_end.value and outing_start.value >= outing_end.value:
             # A corrected start can supersede an old end, and vice versa; reject an inverted new pair.
@@ -111,6 +137,16 @@ class TripContext:
                         preferences[key] = self.preferences[key]
                     else:
                         preferences.pop(key, None)
+        outing_start, outing_end = preferences.get("outing_start_time"), preferences.get("outing_end_time")
+        clocks_changed = any(key in accepted for key in ("outing_start_time", "outing_end_time"))
+        if clocks_changed and outing_start and outing_end and outing_start.value and outing_end.value:
+            minutes = int((dt.datetime.combine(dt.date.min, dt.time.fromisoformat(outing_end.value)) -
+                           dt.datetime.combine(dt.date.min, dt.time.fromisoformat(outing_start.value))).total_seconds() / 60)
+            if 15 <= minutes <= 720:
+                preferences["available_minutes"] = Preference(str(minutes), "specified",
+                    "Duration derived from the user's outing clock window.", derived=True)
+            else:
+                preferences.pop("available_minutes", None)
         start, end = preferences.get("start_date"), preferences.get("end_date")
         if start and end and start.value and end.value and start.value > end.value:
             changed = {key for key in ("start_date", "end_date") if key in accepted}

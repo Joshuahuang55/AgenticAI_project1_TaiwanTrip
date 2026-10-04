@@ -96,7 +96,8 @@ Tool guidance:
   Rough planning budgets may use labeled estimates and assumptions, distinct from returned
   prices, booking quotes, and bank/airport exchange rates.
 - Weather: use typhoon_backup_plan when weather could affect a dated near-term outing,
-  typhoons or rain concerns. Reuse matching city/date/window results. Pass known outing
+  typhoons or rain concerns. Reuse fresh matching city/date/window results; refresh when
+  weather_reusable is false. If cached data is stale, add one brief age note. Pass known outing
   duration and clock window. Base advice on overlapping forecast periods and explain meaningful
   differences; probabilities describe periods, not individual hours or rainfall intensity.
   Strategy thresholds are planning suggestions: consider the user's activities and preferences.

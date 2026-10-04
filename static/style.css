@@ -246,3 +246,9 @@ main {
     header p { display: none; }
     #map { height: 220px; }
 }
+
+/* Separate each route/day while keeping the trip board compact. */
+.board-result + .board-result { border-top: 1px solid #e5e7eb; margin-top: 12px; padding-top: 12px; }
+.board-result h4 { margin: 0 0 8px; font-size: 0.85rem; }
+#map-note { display: block; padding: 6px 10px; color: #64748b; }
+#dates-body section > div { display: flex; flex-wrap: wrap; gap: 6px; }

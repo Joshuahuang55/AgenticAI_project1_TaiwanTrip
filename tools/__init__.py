@@ -3,6 +3,7 @@
 import json
 
 from tools import attractions, exchange, food, holidays, lodging, transport, weather
+from tools import freshness
 
 _MODULES = [
     lodging.legal_stay_check,
@@ -23,7 +24,17 @@ def run_tool(name: str, args: dict) -> str:
     if name not in TOOL_MAP:
         return json.dumps({"error": f"Unknown tool '{name}'. Available: {list(TOOL_MAP)}"})
     try:
-        return TOOL_MAP[name](**args)
+        token = freshness.begin()
+        try:
+            result = TOOL_MAP[name](**args)
+        finally:
+            metadata = freshness.finish(token)
+        if metadata:
+            data = json.loads(result)
+            if isinstance(data, dict):
+                data["data_freshness"] = metadata
+                result = json.dumps(data, ensure_ascii=False)
+        return result
     except (TypeError, ValueError) as e:
         return json.dumps({"error": f"Bad arguments for {name}: {e}", "hint": "Fix the arguments and retry."})
     except Exception as e:  # A bug in one tool should not take down the chat.

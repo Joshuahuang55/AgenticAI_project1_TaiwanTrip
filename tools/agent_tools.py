@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from typing import Annotated, Literal
 
@@ -23,7 +24,7 @@ Interest = Literal["history", "art", "nature", "hiking", "shopping", "culture", 
 
 def _record(ctx, args, result):
     ctx.context.tool_calls.append({"id": ctx.tool_call_id, "name": ctx.tool_name,
-                                   "args": args, "result": result})
+                                   "args": args, "result": result, "recorded_at": time.time()})
     return result
 
 
@@ -70,10 +71,12 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
         if ctx.tool_name in ("find_attractions", "typhoon_backup_plan"):
             keys = ("available_minutes", "setting") if ctx.tool_name == "find_attractions" else ("available_minutes",)
             for key in keys:
+                if key != "setting" and not ctx.context.trip.outing_matches(args.get("city"), args.get("date")):
+                    continue
                 pref = ctx.context.trip.preferences.get(key)
                 if args.get(key) is None and pref and pref.status == "specified":
                     args[key] = int(pref.value) if key == "available_minutes" else pref.value
-            if ctx.tool_name == "typhoon_backup_plan":
+            if ctx.tool_name == "typhoon_backup_plan" and ctx.context.trip.outing_matches(args.get("city"), args.get("date")):
                 for key in ("start_time", "end_time"):
                     pref = ctx.context.trip.preferences.get("outing_" + key)
                     if args.get(key) is None and pref and pref.status == "specified":
@@ -176,7 +179,7 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
                            currency: str = "USD", direction: Literal["to_twd", "from_twd"] = "to_twd") -> str:
         """Convert money between TWD and another currency using daily market rates.
 
-        Return the converted amount, rate/date and sampled 30-day comparison. Does not supply
+        Return the converted amount, rate/date and weekly samples over four weeks. Does not supply
         travel prices or a bank/airport cash-counter quote.
         Use before comparing a foreign-currency budget with TWD hotel rates or other known costs;
         preserve whether the amount covers a meal, a night, or the whole trip.
