@@ -154,7 +154,8 @@ and follow-ups reusing earlier results can show pins without another lookup.
 The frontend still receives readable `response`, actual `tool_calls`, and `map_pins`;
 JSON replies stay internal. Guardrails inspect the message, helper agents read its text,
 and history keeps cleaned structured replies. Rejected/failed turns clear reply metadata
-and restore the previous planning state. No additional model call is added.
+and roll back choices and proposals. Provider failures retain accepted completed lookups;
+guardrail rejections restore the previous planning state. No additional model call is added.
 
 After changing either file in `prompts/`, restart the app and check these conversations:
 
@@ -398,10 +399,44 @@ Each tool still validates its own arguments. Sessions keep the last 20 user turn
 
 ## Run locally
 
-1. A GCP project with billing and the Vertex AI API enabled, then `gcloud auth application-default login`.
-2. A free [TDX](https://tdx.transportdata.tw/) account and a free [CWA open data](https://opendata.cwa.gov.tw/) API key (授權碼). Copy `.env.example` to `.env` and fill in the TDX client ID and secret and `CWA_API_KEY`.
-3. `uv run app.py`, then open http://localhost:8000
-4. Tests (network mocked): `uv run pytest`
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run these commands
+from the repository root after cloning or pulling this branch:
+
+```bash
+uv sync --locked --group dev
+cp .env.example .env
+```
+
+The tracked `.python-version` selects Python 3.11. `uv` creates `.venv` and installs the
+versions in the tracked `uv.lock`, downloading Python if needed. No activation or separate
+`pip install` is required. Copy the template only on first setup; keep an existing `.env`.
+
+Fill **`.env`**, not `.env.example`, with your own `TDX_CLIENT_ID`, `TDX_CLIENT_SECRET`,
+and `CWA_API_KEY`. Obtain them from [TDX](https://tdx.transportdata.tw/) and
+[CWA open data](https://opendata.cwa.gov.tw/). `.env` and `.venv` are ignored by Git.
+
+For model calls, install the Google Cloud CLI, select a GCP project with billing and the
+Vertex AI API enabled, and configure your own application default credentials:
+
+```bash
+gcloud config set project YOUR_PROJECT_ID
+gcloud auth application-default login
+uv run app.py
+```
+
+Open http://localhost:8000. Gemini runs on Vertex AI through LiteLLM; no OpenAI API key
+is needed. Building the environment does not require API credentials; live chat and
+data lookups require the relevant credentials above.
+
+Tests use mocked network/model calls:
+
+```bash
+uv run pytest -q
+```
+
+Install Node.js 22+ to include the frontend checks; pytest skips that check if Node is absent.
+CI installs Node and runs both Python and frontend checks. After pulling dependency changes,
+rerun `uv sync --locked --group dev` rather than copying another contributor's `.venv`.
 
 ## Ranking data
 

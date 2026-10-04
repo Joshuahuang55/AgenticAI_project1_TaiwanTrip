@@ -12,6 +12,10 @@
 - `uv run python scripts/calibrate_crowd_risk.py`: refresh crowd calibration.
 
 Copy `.env.example` to `.env`; configure TDX, CWA, and Google Cloud credentials per `README.md`. `Procfile` defines deployment; the frontend needs no build.
+`.python-version` selects Python 3.11; `uv sync` creates `.venv` without manual activation.
+Keep `pyproject.toml` and `uv.lock` aligned, and use Node.js 22+ for the frontend checks.
+Fresh environment installation requires no API credentials; live use needs each contributor's
+own `.env` and Google application default credentials. Never copy or commit credentials or `.venv`.
 
 ## Agent & Session Contracts
 
@@ -56,6 +60,8 @@ Weather comparisons use overlapping CWA intervals, aligning elements by timestam
 Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_agent_tools.py` for generated schemas and validation, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for food comparisons, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists. CI also runs the dependency-free Node frontend checks (`node --test tests/frontend_state.test.cjs`); mocked TDX token/cache/retry checks live in `tests/test_tdx_client.py`.
 
 Scope board cards by route/date/location, including errors and empty results. Deduplicate/reconcile proposed map pins and prefer English labels; the OpenFreeMap vector basemap falls back to local names when no translation exists, or a labeled raster map when rendering fails.
+Keep optional map assets asynchronous with a bounded loading deadline. Formatting/storage/map
+failures must not block chat, and every send path must release the pending state in `finally`.
 
 Check mode must distinguish uniquely matched lodging from similar-name candidates. Exchange trends use weekly samples over four weeks, not a daily average; absent history leaves a usable conversion and null trend. Clients collect `data_freshness` for tool responses. Weather fallback ages are bounded (forecasts two hours, warnings 15 minutes); never reuse expired session weather as current.
 
