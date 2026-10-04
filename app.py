@@ -23,6 +23,7 @@ from agents.extensions.models.litellm_model import LitellmModel
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from openai.types.shared import Reasoning
 from pydantic import BaseModel
 
 HERE = Path(__file__).parent
@@ -77,7 +78,8 @@ AGENT = Agent[ChatState](
     name="Taiwan Like a Local",
     instructions=instructions,
     model=LitellmModel("vertex_ai/gemini-3.5-flash-lite"),
-    model_settings=ModelSettings(extra_args={"vertex_location": "global", "safety_settings": SAFETY_SETTINGS}),
+    model_settings=ModelSettings(reasoning=Reasoning(effort="low"),
+                                 extra_args={"vertex_location": "global", "safety_settings": SAFETY_SETTINGS}),
     tools=build_tools(lambda name, args: run_tool(name, args)),
     input_guardrails=[guardrails.check_input],
     output_guardrails=[guardrails.make_output_guardrail(SYSTEM_PROMPT)],

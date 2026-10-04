@@ -17,9 +17,15 @@ Copy `.env.example` to `.env`; configure TDX, CWA, and Google Cloud credentials 
 
 This is everyday travel planning, not a verification service. Prioritize useful suggestions and reasonable estimates; keep model instructions short. Routine advice needs at most one relevant practical note, not a checklist of uncertainty.
 
+The main Gemini agent uses low thinking via `ModelSettings.reasoning`; keep the input classifier and preference extractor at minimal thinking rather than inheriting the main agent's effort. Preserve Vertex location and each agent's safety settings when cloning settings.
+
 Preserve `/chat` fields `response`, `session_id`, and `tool_calls` (`name`, `args`, `result`), plus `map_pins` with tool `kind`. SDK tracing stays disabled. Sessions retain 20 user turns, at most 200 sessions, in memory; keep Cloud Run at one instance/process. Preserve tool-call/reply pairs and clear both attraction and food caches on session removal. Exact Chinese names currently drive map pins.
 
 Trip preferences outlive trimmed history within the same session. Keep user evidence, distinguish unknown from no preference, and roll back rejected/failed turns. Serialize session requests; clearing/eviction also removes preferences.
+
+Connect meal follow-ups to hotel/sightseeing areas from the conversation and returned districts. Keep provisional planning choices separate from user preferences; vague agreement does not select every alternative. Pair hotels with their actual locations, and describe district searches without inventing walking distances.
+
+Broad trip plans cover the requested outing, rather than ending after lodging. `tools/planning_hints.py` adds conditional SDK-result suggestions without executing tools or saving preferences. Keep suggestions scoped to the request; reuse matching prior weather and avoid repeat same-turn attempts. Model behavior needs a separate live check.
 
 ## Coding Style & Naming Conventions
 

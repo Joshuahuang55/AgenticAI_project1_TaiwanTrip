@@ -29,8 +29,10 @@ class ScriptedModel(Model):
         self.turns, self.verdict, self.main_inputs = list(turns), verdict, []
         self.context_updates = list(context_updates)
         self.context_inputs, self.main_instructions = [], []
+        self.thinking_efforts = []
 
-    async def get_response(self, system_instructions, input, *args, **kwargs):
+    async def get_response(self, system_instructions, input, model_settings, *args, **kwargs):
+        self.thinking_efforts.append(model_settings.reasoning.effort)
         if system_instructions == guardrails.SCOPE_CHECKER.instructions:
             output = [_text(self.verdict)]
         elif system_instructions == trip_context.EXTRACTOR_PROMPT:
@@ -63,11 +65,13 @@ def _chat(message, session_id=None):
 
 def test_tool_call_runs_and_is_reported(model, monkeypatch):
     monkeypatch.setattr(app, "run_tool", lambda name, args: json.dumps({"rate": 32.0, "args": args}))
-    model([[_call("twd_exchange", '{"amount": 100}')], [_text("About 3,200 TWD.")]])
+    fake = model([[_call("twd_exchange", '{"amount": 100}')], [_text("About 3,200 TWD.")]])
     out = _chat("100 USD in TWD?")
     assert out.response == "About 3,200 TWD."
     assert out.tool_calls == [{"name": "twd_exchange", "args": {"amount": 100.0},
                                "result": json.dumps({"rate": 32.0, "args": {"amount": 100.0}})}]
+    # Both helper calls remain minimal; planning keeps low thinking before and after tools.
+    assert fake.thinking_efforts == ["minimal", "minimal", "low", "low"]
 
 
 def test_lodging_requested_count_is_applied_when_model_omits_limit(model, monkeypatch):
@@ -289,8 +293,10 @@ def test_classifier_runs_without_the_safety_filter(monkeypatch):
     seen = {}
     async def capture(agent, *args, **kwargs):
         seen.update(agent.model_settings.extra_args)
+        assert agent.model_settings.reasoning.effort == "minimal"
         raise RuntimeError("stop")
     monkeypatch.setattr(guardrails.Runner, "run", capture)
     asyncio.run(guardrails.classify("hi", "", None, app.AGENT.model_settings))
     assert seen["safety_settings"] == guardrails.CLASSIFIER_SAFETY and seen["vertex_location"] == "global"
     assert app.AGENT.model_settings.extra_args["safety_settings"] == app.SAFETY_SETTINGS  # main agent unchanged
+    assert app.AGENT.model_settings.reasoning.effort == "low"

@@ -277,6 +277,8 @@ def test_extractor_uses_taiwan_date_and_validated_sdk_output(monkeypatch):
         seen.update(json.loads(payload))
         assert agent.output_type is tc.TripUpdates
         assert agent.tools == [] and kwargs["max_turns"] == 1
+        assert agent.model_settings.reasoning.effort == "minimal"
+        assert agent.model_settings.extra_args == app.AGENT.model_settings.extra_args
         return SimpleNamespace(final_output=tc.TripUpdates(updates=[
             tc.PreferenceUpdate(**update("start_date", "2026-10-04", "tomorrow")),
         ]))
@@ -285,6 +287,7 @@ def test_extractor_uses_taiwan_date_and_validated_sdk_output(monkeypatch):
     context = asyncio.run(tc.extract_trip_context(tc.TripContext(), "tomorrow", "Which day?", None, app.AGENT.model_settings))
     assert seen["today_in_taiwan"] == "2026-10-03"
     assert context.preferences["start_date"].value == "2026-10-04"
+    assert app.AGENT.model_settings.reasoning.effort == "low"
 
 
 def test_invalid_schema_does_not_break_chat(model):

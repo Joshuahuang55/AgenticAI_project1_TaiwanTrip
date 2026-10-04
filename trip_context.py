@@ -4,13 +4,14 @@ import asyncio
 import datetime as dt
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 import litellm
 from agents import Agent, Runner
+from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("taiwan_trip")
@@ -139,6 +140,7 @@ async def extract_trip_context(current: TripContext, message: str, last_reply: s
                           "saved_preferences": current.as_dict(),
                           "last_assistant_message": last_reply[:2000],
                           "new_user_message": message}, ensure_ascii=False)
+    settings = replace(settings, reasoning=Reasoning(effort="minimal"))
     extractor = EXTRACTOR.clone(model=model, model_settings=settings)
     try:
         result = await asyncio.wait_for(Runner.run(extractor, payload, max_turns=1), timeout=10)

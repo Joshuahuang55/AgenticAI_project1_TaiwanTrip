@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 
 import litellm
+from openai.types.shared import Reasoning
 from agents import (
     Agent,
     GuardrailFunctionOutput,
@@ -117,7 +118,8 @@ async def classify(text: str, last_reply: str, model, settings: ModelSettings) -
     Gemini's safety filter on the main agent still apply.
     """
     prompt = f"Assistant's last message:\n{last_reply[:500] or '(none)'}\n\nNew user message:\n{text}"
-    settings = replace(settings, extra_args={**(settings.extra_args or {}), "safety_settings": CLASSIFIER_SAFETY})
+    settings = replace(settings, reasoning=Reasoning(effort="minimal"),
+                       extra_args={**(settings.extra_args or {}), "safety_settings": CLASSIFIER_SAFETY})
     checker = SCOPE_CHECKER.clone(model=model, model_settings=settings)
     try:
         result = await Runner.run(checker, prompt, max_turns=1)

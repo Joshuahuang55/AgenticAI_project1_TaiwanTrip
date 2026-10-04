@@ -11,6 +11,7 @@ from pydantic import Field
 import guardrails
 from guardrails import ChatState
 from tools import lodging_preferences, run_tool
+from tools.planning_hints import add_next_steps
 
 Limit = Annotated[int, Field(ge=1, le=10, strict=True)]
 Minutes = Annotated[int, Field(ge=15, le=720, strict=True)]
@@ -78,6 +79,7 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
                     if args.get(key) is None and pref and pref.status == "specified":
                         args[key] = pref.value
         result = await asyncio.to_thread(executor, ctx.tool_name, args)
+        result = add_next_steps(ctx.tool_name, args, result, ctx.context)
         return _record(ctx, args, result)
 
     @function_tool(**options)
@@ -90,6 +92,8 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         With name, return matching licenses and addresses. Otherwise return ranked stays,
         reported starting rates, a recommended pick and price trade-offs. No live bookings.
+        Use for accommodation within a trip plan; complete the outing with find_attractions
+        and find_local_food when useful. Omit type when no hotel/bnb preference is stated.
 
         Args:
             city: Taiwan city/county, e.g. Taipei, Tainan, or Hualien.
@@ -116,6 +120,9 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         Return place details, sourced dietary/price indications and comparisons; partial data
         still supports everyday suggestions. Night markets include available opening-day schedules.
+        For meal suggestions following a hotel or attraction plan, use that plan's returned
+        district and explain how the food fits its base or stops; preserve dietary/meal budgets.
+        Use for meals within a broader trip plan as well as standalone food requests.
 
         Args:
             city: Taiwan city/county, e.g. Taipei or Tainan.
@@ -144,6 +151,9 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         Return listed details, ranked picks, trade-offs and estimated visit durations. A time
         budget adds an ordered outing with transfer/break allowances. Hours and fees can be absent.
+        Use for sightseeing within a trip plan. For a dated outing within about seven days,
+        check or reuse typhoon_backup_plan first and apply its weather strategy to the setting.
+        Pair meals with find_local_food in the planned stops' districts when useful.
 
         Args:
             city: Taiwan city/county, e.g. Taipei or Tainan.
@@ -166,6 +176,8 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         Return the converted amount, rate/date and sampled 30-day comparison. Does not supply
         travel prices or a bank/airport cash-counter quote.
+        Use before comparing a foreign-currency budget with TWD hotel rates or other known costs;
+        preserve whether the amount covers a meal, a night, or the whole trip.
 
         Args:
             amount: Positive amount to convert.
@@ -184,6 +196,8 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         Return train types/numbers, times, durations, adult standard-class fares and computed
         trade-offs. Rank the whole matching timetable; keep schedules when fares fail. No live seats.
+        Use for travel between cities in a trip plan; let arrival/departure times constrain the
+        sightseeing outline. Use crowd_risk_check separately for holiday travel pressure.
 
         Args:
             origin: Station in English or Chinese, e.g. Taipei.
@@ -205,6 +219,8 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
 
         Use for dated Taiwan itineraries or holiday travel. Return daily risk, reasons and
         historical evidence; this is a TRA network estimate, not HSR demand or live seat occupancy.
+        Combine with hsr_trip_planner when comparing holiday train travel, without treating
+        this estimate as train-specific availability.
 
         Args:
             start_date: First date, YYYY-MM-DD.
@@ -221,6 +237,9 @@ def build_tools(executor: Callable[[str, dict], str] = run_tool) -> list[Functio
         Compare forecast periods overlapping the window and return outdoor/flexible/indoor advice.
         Current warnings recommend postponing sightseeing; future dates outside the forecast get
         a seasonal note. Returns weather only; decide separately whether to call find_attractions.
+        Use before choosing outdoor/indoor stops for a known outing within about seven days;
+        reuse matching session weather for the same city, date and window. Weather-only requests
+        need no attraction lookup; unavailable weather still allows a flexible trip outline.
 
         Args:
             city: Taiwan city/county, e.g. Taipei or Hualien.

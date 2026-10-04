@@ -34,6 +34,10 @@ District filtering narrows an area; it does not confirm walking distance or trav
 
 ### SDK tool definitions
 
+The main agent uses `gemini-3.5-flash-lite` on Vertex AI with low thinking, configured
+through `ModelSettings.reasoning` in `app.py`. The input classifier and preference
+extractor explicitly use minimal thinking to keep their preprocessing calls fast.
+
 All seven agent tools are typed `@function_tool` wrappers in `tools/agent_tools.py`.
 The SDK generates descriptions and JSON schemas from their type hints and Google-style
 docstrings. `Literal` defines choices; `Annotated`/Pydantic `Field` defines numeric bounds.
@@ -47,6 +51,13 @@ produce recorded `error`/`hint` replies so the agent can correct a call and cont
 Optional arguments retain defaults with `strict_mode=False` for Gemini; supplied values
 are validated before execution, and unknown arguments are rejected. Conversation policy
 and the choice to combine weather/attraction tools remain in the system prompt.
+
+Tool descriptions explain when to combine searches. The SDK adapter adds conditional
+`next_steps` suggestions for broad trip plans and dated single-day outings lacking matching
+weather. These hints do not execute tools or save preferences; the model chooses actual calls,
+which remain visible separately. Same-turn attempts suppress repeated suggestions, and matching
+weather from earlier turns can be reused. The lightweight trip-plan detector is heuristic;
+live model checks are still needed to assess whether the agent follows these suggestions.
 
 To add a tool, register its domain function in `tools/__init__.py`, add a decorated typed
 wrapper to `build_tools`, describe arguments in its docstring, and extend the mocked tests.
@@ -80,6 +91,11 @@ After changing either file in `prompts/`, restart the app and check these conver
 - In a new trip, `Recommend sights in Taipei. Just give me three options, no questions.`
   → three tool-backed suggestions without a refinement question.
 - In a new trip, `Find a train from Taipei to Tainan.` → asks for the travel date before a timetable lookup.
+- In a new trip, `Help me plan a cheap weekend in Taipei.` → a base, sightseeing and food
+  in a flexible two-day outline, followed by one useful refinement question.
+- After a stay/sightseeing plan, `I'll follow your plan. What about food?` → searches food in
+  the plan's area and explains how it fits. If multiple bases were offered, it states a provisional
+  choice; assistant suggestions remain separate from user-stated preferences.
 - After the Taipei/Ximen food conversation, `Actually, Tainan. Keep it vegetarian, no questions.`
   → uses Tainan, drops Ximen, retains vegetarian, and skips optional refinement questions.
   Click **New trip**, then ask for food without a city → asks for a city rather than reusing Tainan.
