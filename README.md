@@ -68,7 +68,7 @@ uv sync --locked --group dev
 cp .env.example .env
 ```
 
-The tracked `.python-version` selects Python 3.11. `uv` creates `.venv` and installs the
+The tracked `.python-version` selects Python 3.13, which Cloud Run's buildpacks support. `uv` creates `.venv` and installs the
 versions in the tracked `uv.lock`, downloading Python if needed. No activation or separate
 `pip install` is required. Copy the template only on first setup; keep an existing `.env`.
 

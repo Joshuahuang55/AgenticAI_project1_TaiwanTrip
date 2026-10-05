@@ -12,7 +12,7 @@
 - `uv run python scripts/calibrate_crowd_risk.py`: refresh crowd calibration.
 
 Copy `.env.example` to `.env`; configure TDX, CWA, and Google Cloud credentials per `README.md`. `Procfile` defines deployment; the frontend needs no build.
-`.python-version` selects Python 3.11; `uv sync` creates `.venv` without manual activation.
+`.python-version` selects Python 3.13 (the newest Google Cloud buildpacks support; 3.11 fails to deploy); `uv sync` creates `.venv` without manual activation.
 Keep `pyproject.toml` and `uv.lock` aligned, and use Node.js 22+ for the frontend checks.
 Fresh environment installation requires no API credentials; live use needs each contributor's
 own `.env` and Google application default credentials. Never copy or commit credentials or `.venv`.
