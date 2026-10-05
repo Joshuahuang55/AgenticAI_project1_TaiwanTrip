@@ -260,7 +260,7 @@ const hasHan = (text) => /[㐀-鿿]/.test(text);
 test("an empty lookup budget disables Send and shows when the next lookup frees", async () => {
     const { get, examples } = harness({}, undefined, false, noTimers, { limit: 5, remaining: 0, frees_in_seconds: [30, 40, 50, 55, 59] });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.match(get("quota-text").textContent, /Next in 30 s/);
+    assert.match(get("quota-text").textContent, /All used · 1 renews in 30 s/);
     assert.equal(get("send-btn").disabled, true);
     assert.ok(examples.every((button) => button.disabled));
     assert.equal(get("user-input").disabled, false);
@@ -269,7 +269,7 @@ test("an empty lookup budget disables Send and shows when the next lookup frees"
 test("a partly used budget shows what is left and keeps Send available", async () => {
     const { get } = harness({}, undefined, false, noTimers, { limit: 5, remaining: 3, frees_in_seconds: [12, 50] });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.match(get("quota-text").textContent, /3 of 5 left · \+1 in 12 s/);
+    assert.match(get("quota-text").textContent, /3 of 5 available · 1 renews in 12 s/);
     assert.equal(get("quota-meter").children.length, 5);
     assert.equal(get("send-btn").disabled, false);
 });
@@ -279,7 +279,7 @@ test("a refused question explains the wait and keeps the question for later", as
         message: "Lookup limit reached. Please wait for the next free lookup.",
         tool_quota: { limit: 5, remaining: 0, frees_in_seconds: [20] } } }) }), false, noTimers);
     await app.send("Trains to Tainan?");
-    assert.match(get("messages").textContent, /Lookup limit reached.*Try again in 20 s/);
+    assert.match(get("messages").textContent, /Lookup limit reached.*A lookup renews in 20 s/);
     assert.equal(get("user-input").value, "Trains to Tainan?");
     assert.equal(get("send-btn").disabled, true);
     assert.equal(app.pending(), false);
@@ -289,7 +289,7 @@ test("a reply's quota updates the meter", async () => {
     const { app, get } = harness({}, async () => ({ ok: true, json: async () => ({ session_id: "a", response: "Hi",
         tool_calls: [], tool_quota: { limit: 5, remaining: 2, frees_in_seconds: [45, 50, 58] } }) }), false, noTimers);
     await app.send("Hello");
-    assert.match(get("quota-text").textContent, /2 of 5 left/);
+    assert.match(get("quota-text").textContent, /2 of 5 available/);
 });
 
 test("the trip notes show English for holidays, cities, licences and weather", () => {
@@ -336,4 +336,30 @@ test("listing names on the map and stay list prefer English over a Chinese label
     assert.match(get("stay-body").textContent, /Nilai B&B/);
     assert.match(layer.items[0].popup.textContent, /Xiluodian Beef Soup/);
     assert.equal(hasHan(get("stay-body").textContent + layer.items[0].popup.textContent), false);
+});
+
+test("food and sights lookups appear in English, with the answer's picks first", () => {
+    const { app, get } = harness();
+    app.updateBoard([
+        call("find_local_food", { city: "Tainan", keyword: "beef soup" }, { results: [
+            { name: "文章牛肉湯", name_en: "Wenzhang Beef Soup", district_en: "Anping District" },
+            { name: "西羅殿牛肉湯", name_en: "Xiluodian Beef Soup", district_en: "North District", price: "$", awards: ["500碗 2025"] }],
+            local_tips: [{ name: "Garden Night Market (花園夜市)", open_days: "Thu, Sat, Sun evenings" }] }),
+        call("find_attractions", { city: "Tainan" }, { results: [{ name: "赤崁樓", name_en: "Chikan Tower", categories: ["Heritage site"] }] }),
+    ], [], [{ tool: "find_local_food", name: "西羅殿牛肉湯", label: "西羅殿牛肉湯" }]);
+    const food = get("food-body").textContent, sights = get("sights-body").textContent;
+    assert.match(food, /Xiluodian Beef Soup\s*Suggested[\s\S]*Wenzhang Beef Soup/);
+    assert.match(food, /500 Bowls 2025/);
+    assert.match(food, /Garden Night Market Thu, Sat, Sun evenings/);
+    assert.match(sights, /Chikan Tower Heritage site/);
+    assert.equal(hasHan(food + sights), false);
+});
+
+test("a Chinese reply label does not replace a stay's English name", () => {
+    const { app, get } = harness();
+    app.updateBoard([call("legal_stay_check", { city: "Tainan" }, { stays: [
+        { name: "你來民宿", name_en: "Nilai B&B", license_number: "臺南市民宿100號" }] })], [],
+        [{ tool: "legal_stay_check", name: "你來民宿", label: "你來民宿" }]);
+    assert.match(get("stay-body").textContent, /Nilai B&B/);
+    assert.equal(hasHan(get("stay-body").textContent), false);
 });

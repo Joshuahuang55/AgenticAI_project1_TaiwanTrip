@@ -59,7 +59,7 @@ function quotaAvailable() {
 
 function quotaWaitText() {
     const slots = quotaSlots();
-    return slots && slots.available === 0 && slots.next ? `Try again in ${slots.next} s.` : "";
+    return slots && slots.available === 0 && slots.next ? `A lookup renews in ${slots.next} s.` : "";
 }
 
 function renderQuota() {
@@ -68,9 +68,10 @@ function renderQuota() {
     if (!slots) return;
     const meter = $("quota-meter");
     meter.replaceChildren(...Array.from({ length: slots.limit }, (_, i) => el("i", i < slots.available ? "" : "used")));
-    let text = `${slots.available} of ${slots.limit} left`;
-    if (slots.available === 0) text = slots.next ? `Next in ${slots.next} s` : "None left";
-    else if (slots.next && slots.available < slots.limit) text += ` · +1 in ${slots.next} s`;
+    // Each lookup renews 60 s after it was used, so lookups come back one at a time.
+    let text = `${slots.available} of ${slots.limit} available`;
+    if (slots.available === 0) text = slots.next ? `All used · 1 renews in ${slots.next} s` : "All used";
+    else if (slots.next && slots.available < slots.limit) text += ` · 1 renews in ${slots.next} s`;
     $("quota-text").textContent = text;
     $("quota").classList.toggle("empty", slots.available === 0);
     input.placeholder = slots.available === 0
@@ -558,6 +559,49 @@ function showTrains(data) {
     boardNode("train-card").hidden = false;
 }
 
+// Food and sights: the answer's picks first, then other returned listings, all in English.
+const PLACE_LIMIT = 6;
+const AWARD_NAMES = [["500碗", "500 Bowls"], ["500盤", "500 Dishes"]];
+
+function placeList(data, describe) {
+    const results = [...(data.results || [])].sort((a, b) => Number(Boolean(b.suggested)) - Number(Boolean(a.suggested)));
+    const list = el("ul", "place-list");
+    for (const r of results.slice(0, PLACE_LIMIT)) {
+        const item = el("li", r.suggested ? "suggested" : "");
+        const name = el("b", "", displayName(r));
+        if (r.suggested) name.append(el("span", "badge", "Suggested"));
+        item.append(name, el("div", "place-meta", describe(r).filter(Boolean).join(" · ")));
+        list.append(item);
+    }
+    const nodes = [list];
+    if (!results.length) nodes.push(el("p", "", "No places found for this search."));
+    else if (results.length > PLACE_LIMIT) nodes.push(el("small", "place-more", `${results.length - PLACE_LIMIT} more in the lookup details`));
+    return nodes;
+}
+
+function showFood(data) {
+    const award = (text) => withoutHan(AWARD_NAMES.reduce((t, [zh, en]) => t.replace(zh, en), String(text)));
+    const nodes = placeList(data, (r) => [r.district_en, r.price, ...(r.awards || []).slice(0, 2).map(award), english(r.open_time)]);
+    // Rotating night markets: which evenings each one opens.
+    const tips = (data.local_tips || []).filter((t) => t.open_days);
+    if (tips.length) {
+        const days = el("ul", "place-list");
+        for (const t of tips) {
+            const item = el("li");
+            item.append(el("b", "", withoutHan(t.name, "Night market")), el("div", "place-meta", english(t.open_days)));
+            days.append(item);
+        }
+        nodes.push(el("div", "label-row", "Night market days"), days);
+    }
+    boardNode("food-body").replaceChildren(...nodes);
+    boardNode("food-card").hidden = false;
+}
+
+function showSights(data) {
+    boardNode("sights-body").replaceChildren(...placeList(data, (r) => [r.district_en, (r.categories || []).slice(0, 2).join(", ")]));
+    boardNode("sights-card").hidden = false;
+}
+
 const OUTING_ADVICE = { indoor: "Indoors", flexible: "Flexible", outdoor: "Outdoors fine" };
 
 function showWeather(data) {
@@ -595,6 +639,7 @@ const boardKinds = {
     legal_stay_check: ["stay", showStay], twd_exchange: ["budget", showBudget],
     crowd_risk_check: ["dates", showDates], hsr_trip_planner: ["train", showTrains],
     typhoon_backup_plan: ["weather", showWeather],
+    find_local_food: ["food", showFood], find_attractions: ["sights", showSights],
 };
 
 function scopeKey(call) {
@@ -604,6 +649,8 @@ function scopeKey(call) {
         hsr_trip_planner: ["rail", "origin", "destination", "date", "depart_after", "depart_before", "arrive_by"],
         typhoon_backup_plan: ["city", "date", "start_time", "end_time", "available_minutes"],
         crowd_risk_check: ["start_date", "end_date"], twd_exchange: ["currency", "direction"],
+        find_local_food: ["city", "keyword", "district", "names", "dietary", "style"],
+        find_attractions: ["city", "keyword", "district", "names", "interests", "setting"],
     }[call.name] || ["city"];
     return JSON.stringify([call.name, ...fields.map((key) => ["city", "origin", "destination"].includes(key) ? cityScope(a[key]) : a[key] ?? null)]);
 }
@@ -657,8 +704,11 @@ function updateBoard(calls, mapPins = [], places = []) {
         }
         if (!boardKinds[call.name]) continue;
         const labels = new Map(places.map((p) => [p.name, p.label]));
+        const suggested = new Set([...places, ...mapPins].filter((p) => (p.tool || p.kind) === call.name).map((p) => p.name));
         const enriched = { ...data };
-        for (const key of ["stays", "matches"]) if (data[key]) enriched[key] = data[key].map((p) => ({ ...p, name_en: labels.get(p.name) || p.name_en }));
+        for (const key of ["stays", "matches"]) if (data[key]) enriched[key] = data[key].map((p) => ({ ...p, name_en: english(labels.get(p.name)) || p.name_en }));
+        // Mark the listings the answer recommended so the panel can show them first.
+        if (data.results) enriched.results = data.results.map((r) => ({ ...r, suggested: suggested.has(r.name) }));
         const key = scopeKey(call);
         boardResults.delete(key); boardResults.set(key, { call, data: enriched });
         while (boardResults.size > 30) boardResults.delete(boardResults.keys().next().value);

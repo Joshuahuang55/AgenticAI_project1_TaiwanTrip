@@ -4,6 +4,7 @@ import json
 
 from tools import attractions, exchange, food, holidays, lodging, transport, weather
 from tools import call_budget, freshness
+from tools.english_labels import add_english_fields
 
 _MODULES = [
     lodging.legal_stay_check,
@@ -37,11 +38,16 @@ def run_tool(name: str, args: dict) -> str:
             result = TOOL_MAP[name](**args)
         finally:
             metadata = freshness.finish(token)
-        if metadata:
+        try:
             data = json.loads(result)
-            if isinstance(data, dict):
+        except ValueError:
+            return result
+        if isinstance(data, dict):
+            if metadata:
                 data["data_freshness"] = metadata
-                result = json.dumps(data, ensure_ascii=False)
+            if any(data.get(key) for key in ("results", "stays", "matches")):
+                add_english_fields(data)
+            result = json.dumps(data, ensure_ascii=False)
         return result
     except (TypeError, ValueError) as e:
         return json.dumps({"error": f"Bad arguments for {name}: {e}", "hint": "Fix the arguments and retry."})

@@ -67,7 +67,7 @@ h1 { font-family: var(--serif); font-size: 1.45rem; font-weight: 600; letter-spa
 .quota-meter { display: inline-flex; gap: 3px; }
 .quota-meter i { display: block; width: 9px; height: 14px; border: 1px solid var(--ink); background: var(--ink); }
 .quota-meter i.used { background: transparent; border-color: var(--line); }
-.quota-text { font-variant-numeric: tabular-nums; min-width: 9.5rem; }
+.quota-text { font-variant-numeric: tabular-nums; min-width: 13rem; }
 .quota.empty .quota-label, .quota.empty .quota-text { color: var(--accent); }
 
 /* --- Layout --- */
@@ -344,3 +344,10 @@ main {
     .tool .raw { padding-left: 0; }
 }
 .label-row { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 0.7rem; }
+
+/* Food and sights */
+.place-list { list-style: none; border-top: 1px solid var(--line); }
+.place-list li { padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.86rem; }
+.place-list li.suggested b { color: var(--ink); }
+.place-meta { font-size: 0.76rem; color: var(--muted); margin-top: 0.1rem; }
+.place-more { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.4rem; }
