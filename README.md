@@ -33,14 +33,14 @@ you press **New trip**, and ends each answer with a suggestion for what to ask n
 
 Lookups are shared and capped at **5 per minute**; the meter in the header shows how many are left.
 
-**Sample queries** (also the three buttons on the start screen; ask them in order in one chat)
+**Sample queries** (the three buttons on the start screen), with the tool each one uses:
 
 1. `Find registered B&Bs in Hualien under 3,000 TWD a night.`
    → `legal_stay_check` ranks registered B&Bs by reported starting rate under the cap, with licence
    numbers and districts. They appear in **Trip notes → Stays**.
 2. `I have $1,500 USD for a week. How much is that in TWD?`
-   → `twd_exchange` converts at today's mid-market rate and compares it with the
-   last four weeks. The answer remembers the 3,000 TWD B&B budget from query 1 and works out a daily budget.
+   → `twd_exchange` converts at today's mid-market rate and compares it with the last four weeks.
+   The total appears in **Trip notes → Money**.
 3. `What should I eat in Tainan? I want beef soup for breakfast and a night market in the evening.`
    → `find_local_food` runs twice: beef soup spots (Michelin and 500 Bowls picks) and night markets,
    including the evenings each rotating market opens. Both lists appear in **Trip notes → Food**.
