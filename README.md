@@ -1,30 +1,321 @@
 # Taiwan Like a Local
 
-A chat agent that acts like a local friend for foreigners traveling in Taiwan. It looks things
-up in official Taiwanese open data instead of guessing: whether a B&B is legally registered,
-where locals eat, what to see, whether a typhoon is coming, and how far your budget goes in TWD. Every tool call is shown in the chat,
-and a trip board (map, stay check, budget) is drawn from the tool results.
+**For** foreign travelers planning a trip to Taiwan. **What it does:** a chat agent that answers
+travel questions the way a local friend would, but checks official Taiwanese open data instead of
+guessing: whether a B&B is legally registered, where locals eat, what to see, which train to take,
+whether a holiday will make travel busy, whether rain or a typhoon is coming, and what your budget is
+worth in TWD. Each answer lists the lookups it made, and a trip-notes panel shows the results on a
+map with stays, trains, dates, weather and money.
 
-## Sample queries
+**Live app:** https://agenticai-project1-taiwantrip-git-353565629353.europe-west1.run.app
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `legal_stay_check` ⭐ | Checks whether a hotel or B&B is on the official lodging register, or recommends registered stays by area, type and price. |
+| `find_local_food` | Finds restaurants for a dish or cuisine, and night markets, ranked by awards and local favorites. |
+| `find_attractions` | Recommends sights by city, interests and indoor/outdoor preference, and can fit them into a time budget. |
+| `hsr_trip_planner` | Lists High Speed Rail (THSR) or Taiwan Railway (TRA) trains with times and fares for a date. |
+| `crowd_risk_check` ⭐ | Shows official holidays and estimates how busy travel will be on each date, from the government calendar and past ridership. |
+| `typhoon_backup_plan` ⭐ | Checks the weather forecast and typhoon warnings for a city and date, and says whether to plan outdoors or indoors. |
+| `twd_exchange` | Converts between TWD and other currencies and compares today's rate with recent weeks. |
+
+⭐ = original tool.
+
+## How to use
+
+Open the live app and type a question in the box at the bottom,
+in English or Chinese. The agent picks the tools; each lookup appears under the answer (click
+**details** to see the raw request and response), and places, trains, dates and weather appear in the
+trip-notes panel on the right. **New trip** starts a fresh conversation. Lookups are shared and limited
+to 5 per minute; the **Lookups** meter in the header shows how many are left and when the next frees up.
+
+Example queries:
 
 1. `I found a cheap B&B in Hualien called "你來花蓮民宿". Is it legal? Can you suggest some registered ones?`
-   → `legal_stay_check` twice: confirms license 花蓮縣民宿2170號, then lists registered alternatives on the map.
-2. `I have $1,500 USD for a week. How much is that in TWD, and find me registered B&Bs in Tainan under 3,000 TWD a night.`
-   → `twd_exchange` (with a four-week sampled comparison), then `legal_stay_check` with a price cap.
+   → `legal_stay_check` confirms its licence (Hualien B&B licence No. 2170), then lists registered alternatives on the map.
+2. `I'm taking the train from Taipei to Tainan on Oct 8, 2026. Will the holiday make travel busy?`
+   → `crowd_risk_check` flags Oct 8, the day before the National Day break, as busy; `hsr_trip_planner` lists trains with fares.
 3. `What should I eat in Tainan? I want beef soup for breakfast and a night market in the evening.`
-   → `find_local_food` for 牛肉湯 and for night markets, including which days Tainan's rotating night markets open.
-4. `I'm taking the train from Taipei to Tainan on Oct 8, 2026. Will the holiday make travel busy?`
-   → `crowd_risk_check` highlights the day before the break as the stronger network-wide travel signal; `hsr_trip_planner` lists trains. The risk is not a live seat count.
+   → `find_local_food` for beef soup and for night markets, including which nights each rotating market opens.
 
-5. `Recommend me mountain trails in Taipei.` then `Which one is best for sunset? Are there any temples near it?`
+More examples are in [Appendix B](#b-more-example-queries).
+
+---
+
+## Appendix
+
+Details for readers who want to go further: setup, design and data.
+
+- [A. Run locally](#a-run-locally)
+- [B. More example queries](#b-more-example-queries)
+- [C. Tool reference](#c-tool-reference)
+- [D. Agent design](#d-agent-design)
+- [E. Guardrails](#e-guardrails)
+- [F. Lookup budget](#f-lookup-budget)
+- [G. Data sources and ranking data](#g-data-sources-and-ranking-data)
+- [H. Deploy](#h-deploy)
+- [I. Project layout](#i-project-layout)
+
+### A. Run locally
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run these commands
+from the repository root after cloning or pulling this branch:
+
+```bash
+uv sync --locked --group dev
+cp .env.example .env
+```
+
+The tracked `.python-version` selects Python 3.11. `uv` creates `.venv` and installs the
+versions in the tracked `uv.lock`, downloading Python if needed. No activation or separate
+`pip install` is required. Copy the template only on first setup; keep an existing `.env`.
+
+Fill **`.env`**, not `.env.example`, with your own `TDX_CLIENT_ID`, `TDX_CLIENT_SECRET`,
+and `CWA_API_KEY`. Obtain them from [TDX](https://tdx.transportdata.tw/) and
+[CWA open data](https://opendata.cwa.gov.tw/). `.env` and `.venv` are ignored by Git.
+
+For model calls, install the Google Cloud CLI, select a GCP project with billing and the
+Vertex AI API enabled, and configure your own application default credentials:
+
+```bash
+gcloud config set project YOUR_PROJECT_ID
+gcloud auth application-default login
+uv run app.py
+```
+
+Open http://localhost:8000. Gemini runs on Vertex AI through LiteLLM; no OpenAI API key
+is needed. Building the environment does not require API credentials; live chat and
+data lookups require the relevant credentials above.
+
+Tests use mocked network/model calls:
+
+```bash
+uv run pytest -q
+```
+
+Install Node.js 22+ to include the frontend checks; pytest skips that check if Node is absent.
+CI installs Node and runs both Python and frontend checks. After pulling dependency changes,
+rerun `uv sync --locked --group dev` rather than copying another contributor's `.venv`.
+
+### B. More example queries
+
+1. `I have $1,500 USD for a week. How much is that in TWD, and find me registered B&Bs in Tainan under 3,000 TWD a night.`
+   → `twd_exchange` (with a four-week sampled comparison), then `legal_stay_check` with a price cap.
+2. `Recommend me mountain trails in Taipei.` then `Which one is best for sunset? Are there any temples near it?`
    → `find_attractions` for trails, then again with a district for nearby temples. Only the places named in the answer are pinned.
-6. `I'm going to Hualien this Saturday. Any typhoon or rain I should worry about?`
+3. `I'm going to Hualien this Saturday. Any typhoon or rain I should worry about?`
    → `typhoon_backup_plan` checks the CWA forecast and typhoon warnings. The agent can then call
    `find_attractions` for useful indoor alternatives; each lookup appears separately in the chat.
 
-Follow-up to test memory: after query 2, ask `Is the second one you listed registered? Double check it.`
+Follow-up to test memory: after query 1, ask `Is the second one you listed registered? Double check it.`
 
-## Conversation behavior
+### C. Tool reference
+
+| Tool | What it does | Data source |
+|---|---|---|
+| `legal_stay_check` ⭐ | Checks registration, or compares stays by district, licensed type, and reported starting rates. Python ranks a larger candidate pool before returning a recommended stay and alternatives; budget-friendly requests need no invented price cap | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
+| `find_local_food` | Restaurants by dish and night markets; preference evidence first when criteria are supplied, then awards/local score. Returns sourced facts, missing fields, and comparison checks; `style: local` for locals' favorites | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
+| `twd_exchange` | Converts to/from TWD and compares weekly samples over four weeks | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
+| `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
+| `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
+| `find_attractions` | Sights by city, keyword, district, interests, indoor/outdoor preference, and available time. Python returns a ranked pick, alternatives, estimated visit durations, nearby groups, and a suggested outing. Name lookups tolerate different wording and report closed places. `style: local` favors local appeal; broad default searches also include local gems. Only places named in the answer are pinned | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
+| `typhoon_backup_plan` ⭐ | Compares forecast periods for the outing window and recommends outdoor/flexible/indoor strategies. Returns weather only; the agent decides whether to call `find_attractions` separately. Current warnings remain separate from future forecasts | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`) |
+
+⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
+
+Attractions and restaurants come from the Tourism Administration's daily open-data files, downloaded in the background at startup and refreshed daily ([tools/tourism_data.py](tools/tourism_data.py)). They hold every listing, with no TDX quota and no 500-row cap per query; until they load, or if the download fails, the tools query TDX. Hotels stay on TDX: their file is too large for a 512 MiB instance. Data is used under the [Open Government Data License, version 1.0](https://data.gov.tw/license).
+
+#### Tool output review and comparison boundaries
+
+| Tool | Facts the agent can compare | Missing information / limits |
+|---|---|---|
+| Food | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated |
+| Attractions | Categories, listed details, interest/setting fit, estimated visit duration, ranked comparison and nearby outing | Planning heuristics are estimates; coordinate distances are not walking routes; hours/fees can be missing |
+| Lodging | Registration, licensed type, district, certification, structured reference rates, ranked pick and trade-offs | Registration is not a quality rating; reference starts do not verify every room or travel date; no live rooms/booking prices |
+| Rail | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
+| Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
+| Weather | Time-window comparison, rain chance, temperature, current warning, activity strategy | Forecast periods are broad, not hourly; rain probabilities can be absent; warnings are current; place searches are separate |
+| Exchange | Rate, rate date, converted amount, sampled historical comparison | Mid-market snapshot; no actual cash-counter quote or travel prices; average uses weekly samples |
+
+Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
+as **unavailable**. Source claims are **reported**, not independently verified. Compare only
+available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
+Food, attractions, lodging, rail, and weather now include explicit comparison fields; the other tools retain their existing
+domain outputs. Existing `/chat` fields and map behavior are preserved.
+
+#### Weather assessment and tool coordination
+
+`typhoon_backup_plan` accepts `available_minutes` (15–720) and same-day
+`start_time`/`end_time` in Taiwan `HH:MM`. The default window is 08:00–20:00;
+an explicit start plus duration supplies the end when omitted. Session context retains the
+outing duration and clock window on follow-ups. Train windows are not sightseeing windows.
+
+`forecast` keeps the daily summary; `comparison` considers only intervals overlapping the outing,
+including overnight periods starting the previous day. Weather elements align by timestamp,
+not array index. Below 40% rain favors outdoor activities, 40–69% keeps plans flexible,
+and 70%+ favors indoor activities. These are app planning heuristics, not CWA warning levels
+or estimates of rainfall intensity. Different periods can yield a split plan; missing values
+and incomplete coverage never become an all-clear. The [CWA product specification](https://opendata.cwa.gov.tw/opendatadoc/Forecast/F-D0047-001_093.pdf)
+describes 12-hour weekly intervals and rain probabilities limited to the first three days;
+the tool does not invent hourly probabilities for a shorter outing.
+
+The weather tool performs no attraction or TDX lookup and names no places. The agent decides
+whether an attraction search would help, based on the request, forecast, and saved preferences.
+When useful, it calls `find_attractions` separately with the known district, interests, indoor
+setting for a rainy backup, and `comparison.available_minutes` (capped to the explicit window).
+Both calls appear in `/chat.tool_calls` and the chat display. Weather-only requests can end
+after the weather call; previously retrieved attraction results can also be reused.
+The attraction tool supplies its own comparison, estimated outing timeline, and sources.
+The indoor outing is an alternative for the window, not extra stops added to an outdoor plan.
+Failed attraction lookups leave the weather result available. The legacy `backup_spots` field
+stays empty; attraction pins come from the separate search using the existing map behavior.
+
+Current warnings are separate from future-date forecasts. A warning covering today's city
+sets `postpone_outing`, consistent with [CWA typhoon precautions](https://www.cwa.gov.tw/V8/C/K/Encyclopedia/typhoon/typhoon.pdf).
+An unavailable warning feed is distinct from no warning. Dates beyond the forecast get a
+seasonal note; gaps within the near-term feed are reported as missing forecasts.
+
+#### Trip notes panel and English map
+
+Board results are scoped by route/date/location, including failed and empty searches. Different
+journey legs and weather days can coexist. Proposed pins use stable IDs, English reply labels,
+and recommended/alternative roles; changed proposals replace earlier pins for that city/category.
+
+The Leaflet map uses [OpenFreeMap](https://openfreemap.org/quick_start/) vector tiles through
+MapLibre GL, preferring English names, then Latin names, then local names. No additional API
+key is needed. English coverage depends on OpenStreetMap data; unavailable translations stay
+in the local language. The standard raster map appears immediately while vector assets load asynchronously, so map downloads do not block chat. A 20-second deadline covers scripts, style, and renderer readiness; failures leave a labeled raster fallback. Map/CDN requests go to their public providers.
+
+The panel shows English: tools add `holiday_name_en` and `weather_en` ([tools/english_labels.py](tools/english_labels.py)), city names and licence numbers are rendered in English, and remaining Chinese glosses are dropped. Listing names without an English name and the raw lookup details can still contain Chinese.
+
+#### Data freshness and exchange comparison
+
+Tool results include `data_freshness` entries with source, UTC retrieval time, age, and stale
+status. TDX and daily tourism caches can retain useful older data during outages; stale board
+cards show retrieval time. Forecast fallback is limited to two hours, and warning fallback to
+15 minutes; fresh warning cache lasts five minutes. Old session weather is marked for refresh.
+
+Exchange comparison uses today plus available 7/14/21/28-day snapshots, not 30 daily rates.
+`sampled_average`, `comparison_method`, and `comparison_status` describe it; legacy `avg_30d`
+and `vs_30d` fields remain for compatibility. Without historical samples, the conversion is
+still returned, while the average/difference are null and comparison is unavailable.
+
+#### Lodging preference comparisons
+
+Check mode distinguishes a unique normalized same-city name (`match_status: matched`,
+`is_registered: true`) from similar or out-of-city records (`candidates`, null). Candidate
+addresses are displayed for disambiguation; an unsuccessful search does not prove illegality.
+
+List mode supports `district` (Traditional Chinese), `type` (`hotel`/`bnb`),
+`price_preference` (`budget`/`any`), and `max_price_twd` for a stated numeric nightly budget.
+"Cheap" uses `budget`, which ranks by lower reported starting rates without inventing a cap.
+The tool makes one cached TDX query for up to 500 candidates, then filters, deduplicates,
+and ranks in Python before returning up to `limit` stays (1–10, default 5).
+An explicit recommendation count is applied by the SDK wrapper when recognized, even if the
+model omits `limit`; guests, nights, star ratings, and prices are not result counts. Numeric budgets
+exclude known higher starting rates; absent/zero/invalid rates remain unknown and eligible.
+Known lower starting rates rank before missing rates for budget requests; certification breaks
+price ties. Without a price preference, Taiwan Host certification leads the ordering.
+
+`stays` preserves existing UI/map fields and adds `district`, `price_range_twd`, and
+`preference_match`. `comparison` provides the recommended name, reasons, reference-price
+differences, and candidate counts. A pool reaching 500 may be incomplete; recommendations are
+among returned candidates. District matches do not establish proximity to a landmark or MRT.
+Prices are owner-reported reference ranges, not booking quotes; a starting rate within a cap
+does not mean every room or date qualifies. Missing rates do not prevent useful suggestions.
+Registration check mode retains its name matching and nationwide fallback behavior.
+
+#### Attraction preference comparisons
+
+Pass `interests` (history, art, nature, hiking, shopping, culture, museums, temples), `setting`
+(`indoor`, `outdoor`, or `any`), and `available_minutes` (15–720) when the user supplies them.
+The time budget is for the entire outing, excluding travel to/from the area. Keep these criteria
+on `names` detail lookups. Preferences rank before fame/local scores; they do not exclude every
+unknown or partial match. Broad searches retain existing fame, variety, and local-gem behavior.
+
+Each result includes `planning` and `preference_match`; `comparison` provides the recommended
+name, reasons, alternatives, and nearby groups. Visit-duration ranges and indoor/outdoor labels
+are category/name estimates, separate from reported hours and admission prices. Nearby groups
+require every pair to be within 2 km in a straight line. A time-budgeted `suggested_visit` gives
+an ordered `timeline` with visits limited by time and suitable candidates, estimated city transfers (20–60 minutes), and a
+30-minute break for outings of at least four hours with multiple stops. Transfers may connect
+places beyond the nearby-group radius; unknown coordinates use a 45-minute allowance without
+claiming proximity. Visits use typical category durations rather than automatically expanding
+to consume the budget. The tool reports planned and remaining minutes.
+For a requested itinerary, the agent accounts for remaining time with suitable options, another
+search, or explicit free time and breaks; the candidate limit is not a quota for scheduled stops.
+Time and setting preferences persist within the session; the attraction wrapper restores them
+when omitted on follow-ups. A destination change clears the old outing's time budget.
+It is a planning suggestion, not a checked walking route or date-specific opening-hours itinerary.
+Missing hours/prices still allow useful recommendations. No additional API or dataset rebuild is needed.
+
+#### Food preference comparisons
+
+Optional arguments `dietary` (`vegetarian`/`vegan`), `price_preference` (`budget`/`mid_range`/`any`),
+`max_price_twd`, and `confirmed_only` accompany existing city/district/dish filters. Keep them
+on `names` lookups. Set `confirmed_only: true` when the user requests only confirmed matches;
+this requires reported support for every requested criterion, not live independent verification.
+`budget` selects the relative `$` category and `mid_range` allows `$`/`$$`; unknown bands remain
+unconfirmed. A numeric cap is explicitly per person per meal in TWD. No returned band verifies
+that exact cap; lower known bands simply rank first among otherwise equal unconfirmed leads.
+
+Each restaurant's `facts` contains `value`, `status`, and `source`, plus dietary evidence when
+available. `comparison` checks each requested criterion and marks the overall fit as
+`reported_match`, `needs_confirmation`, `conflict`, or `not_requested`. Conflicting options
+appear in `excluded`, not `results`. With `confirmed_only`, uncertain candidates are also excluded
+without their names; exact meal caps currently cannot be confirmed. `comparison_summary` counts
+returned matches/leads, excluded conflicts, and excluded unconfirmed candidates. Ranking favors
+dietary reports, then dietary name/cuisine indications, ahead of candidates with no dietary
+evidence. It next compares other criteria, dietary variety, relative prices, and keyword/awards.
+Ordinary recommendations offer promising dietary leads with brief caveats when reports or
+prices are unavailable; "cheap" does not require exact meal-price confirmation. Constrained
+searches do not inject lower-fit local gems just to fill the list. Searches are not exhaustive.
+
+This is everyday travel planning: useful suggestions and reasonable estimates take priority
+over exhaustive verification. Traveler-facing answers start with choices and concrete comparisons. Evidence/status labels
+stay internal; relevant data gaps are combined into one short practical note after suggestions.
+Missing fields alone do not trigger a refusal. Strict evidence filtering requires an explicit
+request for confirmed matches. This response policy also applies to other recommendation tools.
+
+OSM dietary tags retain their [vegetarian](https://wiki.openstreetmap.org/wiki/Key:diet:vegetarian)
+and [vegan](https://wiki.openstreetmap.org/wiki/Key:diet:vegan) distinctions. Names/cuisine terms
+are only indications; contradictory tags remain uncertain. The builder now preserves dietary
+tags and reported districts on future intentional refreshes. Existing bundled records without
+these tags remain unknown; this change does not regenerate the dataset or manufacture facts.
+Merged listings preserve the source of borrowed hours/dietary information.
+
+Test in a fresh trip: `Recommend vegetarian food around Ximen in Taipei. I prefer cheap places.`
+Then `What about vegan options under TWD 300 per person per meal?`
+Inspect dietary/price arguments and checks: the agent should explain its choice and alternatives,
+and disclose unconfirmed dietary evidence and exact prices. Missing results must not become
+invented recommendations. Automated comparison tests use competing fictional candidates;
+real-model behavior needs a separate conversation check.
+
+#### Train preferences and comparisons
+
+`hsr_trip_planner` ranks the whole matching timetable before selecting `limit` options (1–10,
+default 3). `preference` accepts `earliest_arrival` (default), `fastest`, `cheapest`, or
+`earliest_departure`. Default ranking favors arriving soonest, with ties favoring shorter journeys;
+earliest departure applies only when requested. Cheapest compares adult standard-class fares, with ties favoring
+shorter journeys; unknown fares are never treated as free. Each query compares one rail service.
+
+`depart_after` and `depart_before` define an inclusive departure window in `HH:MM`.
+`arrive_by` is an inclusive arrival deadline on the **same travel date**, not the following day.
+Overnight journeys include `arrival_date`, and arrival ranking accounts for the day change.
+
+The existing `trains` list retains train types, times, durations, and fares. `comparison` adds
+the recommended train, reason, matching/returned counts, equal-fare flag, and computed time/fare
+differences for alternatives. Missing fares leave schedules usable; for `cheapest` with no fares,
+the tool recommends the earliest arrival instead. Station/timetable failures still return errors.
+Ranking uses the same station, timetable, and fare requests as before, without per-train requests.
+
+Try: `Find three HSR options from Taipei to Tainan on October 8, 2026. Depart between 09:00 and
+12:00 and arrive by 14:00. Prefer the fastest journey. Which would you choose?`
+Then: `Keep the same route and date, but show five options and prioritize the earliest arrival.`
+
+### D. Agent design
 
 Broad recommendation requests get a small initial selection from tool results, with areas and
 brief reasons, followed by at most one optional question to refine the next answer. The agent
@@ -43,7 +334,7 @@ estimated costs/durations. Exact last departures, current fares, and all-night s
 relevant retrieved information. Source lines name sources from relevant tool results, including
 reused session results; general knowledge is not presented as an official lookup.
 
-### SDK tool definitions
+#### SDK tool definitions
 
 The main agent uses `gemini-3.5-flash-lite` on Vertex AI with medium thinking, configured
 through `ModelSettings.reasoning` in `app.py`. The input classifier and preference
@@ -74,7 +365,7 @@ To add a tool, register its domain function in `tools/__init__.py`, add a decora
 wrapper to `build_tools`, describe arguments in its docstring, and extend the mocked tests.
 Check a fresh app session after description changes; tests do not establish live model choices.
 
-### Trip context within a session
+#### Trip context within a session
 
 Each session saves the user's city, area, travel dates, departure point, budget, interests,
 dietary needs, outing duration/setting and clock window, and question preference separately from the last 20 user turns.
@@ -100,7 +391,7 @@ active server turn before removing its state. Busy states are never evicted. Cla
 calls have ten-second deadlines, the whole turn has a 180-second deadline, and the frontend
 request stops after 190 seconds.
 
-### Planning context and SDK hooks
+#### Planning context and SDK hooks
 
 `agent_hooks.py` collects accepted tool results after output checks. `planning_context.py`
 keeps up to 10 compact lookup records: candidate locations, reference prices, weather strategy,
@@ -136,7 +427,7 @@ To check continuity, ask for a weekend stay/outing, then `Sounds good. What abou
 Also select a returned hotel by name and ask for nearby sights. Inspect actual searches and
 the answer; mocked tests establish the hook/state behavior, not live recommendation quality.
 
-### Structured final replies
+#### Structured final replies
 
 The main agent uses SDK `output_type=TravelReply` from `agent_reply.py`: Markdown
 `message`, proposed `places`, and lookup `sources`. Accepted planning records and their
@@ -179,209 +470,7 @@ After changing either file in `prompts/`, restart the app and check these conver
 Inspect the displayed tool calls as well as the answer. Scripted-model tests cover the harness;
 they do not establish whether Gemini follows this policy.
 
-## Tools
-
-| Tool | What it does | Data source |
-|---|---|---|
-| `legal_stay_check` ⭐ | Checks registration, or compares stays by district, licensed type, and reported starting rates. Python ranks a larger candidate pool before returning a recommended stay and alternatives; budget-friendly requests need no invented price cap | Tourism Administration lodging register via [TDX](https://tdx.transportdata.tw/) |
-| `find_local_food` | Restaurants by dish and night markets; preference evidence first when criteria are supplied, then awards/local score. Returns sourced facts, missing fields, and comparison checks; `style: local` for locals' favorites | Tourism Administration [daily open data](https://data.gov.tw/dataset/7779) (TDX as fallback), [OpenStreetMap](https://www.openstreetmap.org/copyright), award lists (see below), plus local night-market schedules |
-| `twd_exchange` | Converts to/from TWD and compares weekly samples over four weeks | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
-| `hsr_trip_planner` | THSR or TRA options ranked by time/fare preferences, with a recommendation and computed trade-offs; default three, up to ten | TDX rail timetables and adult one-way standard-class fares |
-| `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
-| `find_attractions` | Sights by city, keyword, district, interests, indoor/outdoor preference, and available time. Python returns a ranked pick, alternatives, estimated visit durations, nearby groups, and a suggested outing. Name lookups tolerate different wording and report closed places. `style: local` favors local appeal; broad default searches also include local gems. Only places named in the answer are pinned | Tourism Administration [daily open data](https://data.gov.tw/dataset/7777) (TDX as fallback), plus [Wikidata](https://www.wikidata.org/) and Wikipedia pageviews for fame and missing sights |
-| `typhoon_backup_plan` ⭐ | Compares forecast periods for the outing window and recommends outdoor/flexible/indoor strategies. Returns weather only; the agent decides whether to call `find_attractions` separately. Current warnings remain separate from future forecasts | [CWA open data](https://opendata.cwa.gov.tw/) (`F-D0047-091`, `W-C0034-001`) |
-
-⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
-
-Attractions and restaurants come from the Tourism Administration's daily open-data files, downloaded in the background at startup and refreshed daily ([tools/tourism_data.py](tools/tourism_data.py)). They hold every listing, with no TDX quota and no 500-row cap per query; until they load, or if the download fails, the tools query TDX. Hotels stay on TDX: their file is too large for a 512 MiB instance. Data is used under the [Open Government Data License, version 1.0](https://data.gov.tw/license).
-
-### Tool output review and comparison boundaries
-
-| Tool | Facts the agent can compare | Missing information / limits |
-|---|---|---|
-| Food | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated |
-| Attractions | Categories, listed details, interest/setting fit, estimated visit duration, ranked comparison and nearby outing | Planning heuristics are estimates; coordinate distances are not walking routes; hours/fees can be missing |
-| Lodging | Registration, licensed type, district, certification, structured reference rates, ranked pick and trade-offs | Registration is not a quality rating; reference starts do not verify every room or travel date; no live rooms/booking prices |
-| Rail | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
-| Crowds | Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
-| Weather | Time-window comparison, rain chance, temperature, current warning, activity strategy | Forecast periods are broad, not hourly; rain probabilities can be absent; warnings are current; place searches are separate |
-| Exchange | Rate, rate date, converted amount, sampled historical comparison | Mid-market snapshot; no actual cash-counter quote or travel prices; average uses weekly samples |
-
-Treat missing facts as **unknown**, explicit contrary reports as **conflicts**, and failed lookups
-as **unavailable**. Source claims are **reported**, not independently verified. Compare only
-available facts, explain the best supported fit and alternatives, and name relevant uncertainty.
-Food, attractions, lodging, rail, and weather now include explicit comparison fields; the other tools retain their existing
-domain outputs. Existing `/chat` fields and map behavior are preserved.
-
-### Weather assessment and tool coordination
-
-`typhoon_backup_plan` accepts `available_minutes` (15–720) and same-day
-`start_time`/`end_time` in Taiwan `HH:MM`. The default window is 08:00–20:00;
-an explicit start plus duration supplies the end when omitted. Session context retains the
-outing duration and clock window on follow-ups. Train windows are not sightseeing windows.
-
-`forecast` keeps the daily summary; `comparison` considers only intervals overlapping the outing,
-including overnight periods starting the previous day. Weather elements align by timestamp,
-not array index. Below 40% rain favors outdoor activities, 40–69% keeps plans flexible,
-and 70%+ favors indoor activities. These are app planning heuristics, not CWA warning levels
-or estimates of rainfall intensity. Different periods can yield a split plan; missing values
-and incomplete coverage never become an all-clear. The [CWA product specification](https://opendata.cwa.gov.tw/opendatadoc/Forecast/F-D0047-001_093.pdf)
-describes 12-hour weekly intervals and rain probabilities limited to the first three days;
-the tool does not invent hourly probabilities for a shorter outing.
-
-The weather tool performs no attraction or TDX lookup and names no places. The agent decides
-whether an attraction search would help, based on the request, forecast, and saved preferences.
-When useful, it calls `find_attractions` separately with the known district, interests, indoor
-setting for a rainy backup, and `comparison.available_minutes` (capped to the explicit window).
-Both calls appear in `/chat.tool_calls` and the chat display. Weather-only requests can end
-after the weather call; previously retrieved attraction results can also be reused.
-The attraction tool supplies its own comparison, estimated outing timeline, and sources.
-The indoor outing is an alternative for the window, not extra stops added to an outdoor plan.
-Failed attraction lookups leave the weather result available. The legacy `backup_spots` field
-stays empty; attraction pins come from the separate search using the existing map behavior.
-
-Current warnings are separate from future-date forecasts. A warning covering today's city
-sets `postpone_outing`, consistent with [CWA typhoon precautions](https://www.cwa.gov.tw/V8/C/K/Encyclopedia/typhoon/typhoon.pdf).
-An unavailable warning feed is distinct from no warning. Dates beyond the forecast get a
-seasonal note; gaps within the near-term feed are reported as missing forecasts.
-
-### Trip board and English map
-
-Board results are scoped by route/date/location, including failed and empty searches. Different
-journey legs and weather days can coexist. Proposed pins use stable IDs, English reply labels,
-and recommended/alternative roles; changed proposals replace earlier pins for that city/category.
-
-The Leaflet map uses [OpenFreeMap](https://openfreemap.org/quick_start/) vector tiles through
-MapLibre GL, preferring English names, then Latin names, then local names. No additional API
-key is needed. English coverage depends on OpenStreetMap data; unavailable translations stay
-in the local language. The standard raster map appears immediately while vector assets load asynchronously, so map downloads do not block chat. A 20-second deadline covers scripts, style, and renderer readiness; failures leave a labeled raster fallback. Map/CDN requests go to their public providers.
-
-### Data freshness and exchange comparison
-
-Tool results include `data_freshness` entries with source, UTC retrieval time, age, and stale
-status. TDX and daily tourism caches can retain useful older data during outages; stale board
-cards show retrieval time. Forecast fallback is limited to two hours, and warning fallback to
-15 minutes; fresh warning cache lasts five minutes. Old session weather is marked for refresh.
-
-Exchange comparison uses today plus available 7/14/21/28-day snapshots, not 30 daily rates.
-`sampled_average`, `comparison_method`, and `comparison_status` describe it; legacy `avg_30d`
-and `vs_30d` fields remain for compatibility. Without historical samples, the conversion is
-still returned, while the average/difference are null and comparison is unavailable.
-
-### Lodging preference comparisons
-
-Check mode distinguishes a unique normalized same-city name (`match_status: matched`,
-`is_registered: true`) from similar or out-of-city records (`candidates`, null). Candidate
-addresses are displayed for disambiguation; an unsuccessful search does not prove illegality.
-
-List mode supports `district` (Traditional Chinese), `type` (`hotel`/`bnb`),
-`price_preference` (`budget`/`any`), and `max_price_twd` for a stated numeric nightly budget.
-"Cheap" uses `budget`, which ranks by lower reported starting rates without inventing a cap.
-The tool makes one cached TDX query for up to 500 candidates, then filters, deduplicates,
-and ranks in Python before returning up to `limit` stays (1–10, default 5).
-An explicit recommendation count is applied by the SDK wrapper when recognized, even if the
-model omits `limit`; guests, nights, star ratings, and prices are not result counts. Numeric budgets
-exclude known higher starting rates; absent/zero/invalid rates remain unknown and eligible.
-Known lower starting rates rank before missing rates for budget requests; certification breaks
-price ties. Without a price preference, Taiwan Host certification leads the ordering.
-
-`stays` preserves existing UI/map fields and adds `district`, `price_range_twd`, and
-`preference_match`. `comparison` provides the recommended name, reasons, reference-price
-differences, and candidate counts. A pool reaching 500 may be incomplete; recommendations are
-among returned candidates. District matches do not establish proximity to a landmark or MRT.
-Prices are owner-reported reference ranges, not booking quotes; a starting rate within a cap
-does not mean every room or date qualifies. Missing rates do not prevent useful suggestions.
-Registration check mode retains its name matching and nationwide fallback behavior.
-
-### Attraction preference comparisons
-
-Pass `interests` (history, art, nature, hiking, shopping, culture, museums, temples), `setting`
-(`indoor`, `outdoor`, or `any`), and `available_minutes` (15–720) when the user supplies them.
-The time budget is for the entire outing, excluding travel to/from the area. Keep these criteria
-on `names` detail lookups. Preferences rank before fame/local scores; they do not exclude every
-unknown or partial match. Broad searches retain existing fame, variety, and local-gem behavior.
-
-Each result includes `planning` and `preference_match`; `comparison` provides the recommended
-name, reasons, alternatives, and nearby groups. Visit-duration ranges and indoor/outdoor labels
-are category/name estimates, separate from reported hours and admission prices. Nearby groups
-require every pair to be within 2 km in a straight line. A time-budgeted `suggested_visit` gives
-an ordered `timeline` with visits limited by time and suitable candidates, estimated city transfers (20–60 minutes), and a
-30-minute break for outings of at least four hours with multiple stops. Transfers may connect
-places beyond the nearby-group radius; unknown coordinates use a 45-minute allowance without
-claiming proximity. Visits use typical category durations rather than automatically expanding
-to consume the budget. The tool reports planned and remaining minutes.
-For a requested itinerary, the agent accounts for remaining time with suitable options, another
-search, or explicit free time and breaks; the candidate limit is not a quota for scheduled stops.
-Time and setting preferences persist within the session; the attraction wrapper restores them
-when omitted on follow-ups. A destination change clears the old outing's time budget.
-It is a planning suggestion, not a checked walking route or date-specific opening-hours itinerary.
-Missing hours/prices still allow useful recommendations. No additional API or dataset rebuild is needed.
-
-### Food preference comparisons
-
-Optional arguments `dietary` (`vegetarian`/`vegan`), `price_preference` (`budget`/`mid_range`/`any`),
-`max_price_twd`, and `confirmed_only` accompany existing city/district/dish filters. Keep them
-on `names` lookups. Set `confirmed_only: true` when the user requests only confirmed matches;
-this requires reported support for every requested criterion, not live independent verification.
-`budget` selects the relative `$` category and `mid_range` allows `$`/`$$`; unknown bands remain
-unconfirmed. A numeric cap is explicitly per person per meal in TWD. No returned band verifies
-that exact cap; lower known bands simply rank first among otherwise equal unconfirmed leads.
-
-Each restaurant's `facts` contains `value`, `status`, and `source`, plus dietary evidence when
-available. `comparison` checks each requested criterion and marks the overall fit as
-`reported_match`, `needs_confirmation`, `conflict`, or `not_requested`. Conflicting options
-appear in `excluded`, not `results`. With `confirmed_only`, uncertain candidates are also excluded
-without their names; exact meal caps currently cannot be confirmed. `comparison_summary` counts
-returned matches/leads, excluded conflicts, and excluded unconfirmed candidates. Ranking favors
-dietary reports, then dietary name/cuisine indications, ahead of candidates with no dietary
-evidence. It next compares other criteria, dietary variety, relative prices, and keyword/awards.
-Ordinary recommendations offer promising dietary leads with brief caveats when reports or
-prices are unavailable; "cheap" does not require exact meal-price confirmation. Constrained
-searches do not inject lower-fit local gems just to fill the list. Searches are not exhaustive.
-
-This is everyday travel planning: useful suggestions and reasonable estimates take priority
-over exhaustive verification. Traveler-facing answers start with choices and concrete comparisons. Evidence/status labels
-stay internal; relevant data gaps are combined into one short practical note after suggestions.
-Missing fields alone do not trigger a refusal. Strict evidence filtering requires an explicit
-request for confirmed matches. This response policy also applies to other recommendation tools.
-
-OSM dietary tags retain their [vegetarian](https://wiki.openstreetmap.org/wiki/Key:diet:vegetarian)
-and [vegan](https://wiki.openstreetmap.org/wiki/Key:diet:vegan) distinctions. Names/cuisine terms
-are only indications; contradictory tags remain uncertain. The builder now preserves dietary
-tags and reported districts on future intentional refreshes. Existing bundled records without
-these tags remain unknown; this change does not regenerate the dataset or manufacture facts.
-Merged listings preserve the source of borrowed hours/dietary information.
-
-Test in a fresh trip: `Recommend vegetarian food around Ximen in Taipei. I prefer cheap places.`
-Then `What about vegan options under TWD 300 per person per meal?`
-Inspect dietary/price arguments and checks: the agent should explain its choice and alternatives,
-and disclose unconfirmed dietary evidence and exact prices. Missing results must not become
-invented recommendations. Automated comparison tests use competing fictional candidates;
-real-model behavior needs a separate conversation check.
-
-### Train preferences and comparisons
-
-`hsr_trip_planner` ranks the whole matching timetable before selecting `limit` options (1–10,
-default 3). `preference` accepts `earliest_arrival` (default), `fastest`, `cheapest`, or
-`earliest_departure`. Default ranking favors arriving soonest, with ties favoring shorter journeys;
-earliest departure applies only when requested. Cheapest compares adult standard-class fares, with ties favoring
-shorter journeys; unknown fares are never treated as free. Each query compares one rail service.
-
-`depart_after` and `depart_before` define an inclusive departure window in `HH:MM`.
-`arrive_by` is an inclusive arrival deadline on the **same travel date**, not the following day.
-Overnight journeys include `arrival_date`, and arrival ranking accounts for the day change.
-
-The existing `trains` list retains train types, times, durations, and fares. `comparison` adds
-the recommended train, reason, matching/returned counts, equal-fare flag, and computed time/fare
-differences for alternatives. Missing fares leave schedules usable; for `cheapest` with no fares,
-the tool recommends the earliest arrival instead. Station/timetable failures still return errors.
-Ranking uses the same station, timetable, and fare requests as before, without per-train requests.
-
-Try: `Find three HSR options from Taipei to Tainan on October 8, 2026. Depart between 09:00 and
-12:00 and arrive by 14:00. Prefer the fastest journey. Which would you choose?`
-Then: `Keep the same route and date, but show five options and prioritize the earliest arrival.`
-
-## Guardrails
+### E. Guardrails
 
 The agent runs on the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/guardrails/) with Gemini through its LiteLLM adapter (beta). Guardrails use the SDK's interfaces, in [guardrails.py](guardrails.py):
 
@@ -389,56 +478,25 @@ The agent runs on the [OpenAI Agents SDK](https://openai.github.io/openai-agents
 |---|---|---|
 | Input (blocking, before the model) | Message over 2,000 characters; a Gemini classifier (safety filter off, so it can read what it labels) flags prompt injection, harmful requests, or requests outside Taiwan travel | Tripwire: fixed reply, no main model or TDX call, message kept out of history. A classifier error allows the message |
 | Tool input | Any string argument over 200 characters | Rejected: the model gets an error and hint instead of a tool run |
-| Tool output | Result text that looks like instructions (e.g. "ignore previous instructions") | Rejected: the model gets an error and hint; the result is hidden from the trip board |
+| Tool output | Result text that looks like instructions (e.g. "ignore previous instructions") | Rejected: the model gets an error and hint; the result is hidden from the trip notes |
 | Output | Answer repeats a system-prompt sentence, or names a Chinese lodging (in parentheses) that no tool result or user message contains | Tripwire: fixed reply |
 | Output cleanup (after the run) | Links to a host that is not official (`.gov.tw`, `taiwan.net.tw`, `thsrc.com.tw`, `transportdata.tw`) and not in a tool result or user message | The link is removed (Markdown links keep their text) and the rest of the answer is shown; history keeps the cleaned answer |
 | Model | Gemini safety settings block medium-or-higher harassment, hate, sexual, and dangerous content | Fixed reply |
 | Agent | At most 8 model turns; model errors are logged, not shown | Fixed reply |
 
-Each tool still validates its own arguments. Sessions keep the last 20 user turns, with at most 200 sessions in memory. SDK tracing is off, so chats are not sent to OpenAI. Not covered: rate limiting, PII, lodging names written only in English (the register lists Chinese names only).
+Each tool still validates its own arguments. Sessions keep the last 20 user turns, with at most 200 sessions in memory. SDK tracing is off, so chats are not sent to OpenAI. Tool calls are capped per minute ([F](#f-lookup-budget)). Not covered: per-user rate limiting, PII, lodging names written only in English (the register lists Chinese names only).
 
-## Run locally
+### F. Lookup budget
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run these commands
-from the repository root after cloning or pulling this branch:
+All users share a budget of 5 tool calls per rolling minute (`TOOL_CALLS_PER_MINUTE` overrides it), set in
+[tools/call_budget.py](tools/call_budget.py). Each call frees its slot 60 seconds after it ran. Over the limit,
+a tool returns an `error` with `retry_after_seconds`, and `/chat` answers HTTP 429 without calling the model.
+`GET /quota` and each `/chat` reply's `tool_quota` give `limit`, `remaining`, and `frees_in_seconds`; the header
+meter counts down from them and disables sending while no lookup is free.
 
-```bash
-uv sync --locked --group dev
-cp .env.example .env
-```
+### G. Data sources and ranking data
 
-The tracked `.python-version` selects Python 3.11. `uv` creates `.venv` and installs the
-versions in the tracked `uv.lock`, downloading Python if needed. No activation or separate
-`pip install` is required. Copy the template only on first setup; keep an existing `.env`.
-
-Fill **`.env`**, not `.env.example`, with your own `TDX_CLIENT_ID`, `TDX_CLIENT_SECRET`,
-and `CWA_API_KEY`. Obtain them from [TDX](https://tdx.transportdata.tw/) and
-[CWA open data](https://opendata.cwa.gov.tw/). `.env` and `.venv` are ignored by Git.
-
-For model calls, install the Google Cloud CLI, select a GCP project with billing and the
-Vertex AI API enabled, and configure your own application default credentials:
-
-```bash
-gcloud config set project YOUR_PROJECT_ID
-gcloud auth application-default login
-uv run app.py
-```
-
-Open http://localhost:8000. Gemini runs on Vertex AI through LiteLLM; no OpenAI API key
-is needed. Building the environment does not require API credentials; live chat and
-data lookups require the relevant credentials above.
-
-Tests use mocked network/model calls:
-
-```bash
-uv run pytest -q
-```
-
-Install Node.js 22+ to include the frontend checks; pytest skips that check if Node is absent.
-CI installs Node and runs both Python and frontend checks. After pulling dependency changes,
-rerun `uv sync --locked --group dev` rather than copying another contributor's `.venv`.
-
-## Ranking data
+#### Ranking data
 
 Official listings carry no popularity signal, so the bundled files in `tools/data/` add one. Each has a build script; none is needed at runtime.
 
@@ -452,16 +510,16 @@ Official listings carry no popularity signal, so the bundled files in `tools/dat
 
 **Research and education use only.** This is a course project. The Michelin Guide data (michelin-my-maps states its data is for research use only) and the 500盤/500碗 lists (© 500輯) are used for research and education, not commercially, and are not redistributed for other use. Remove `food_fame.json` and `data/food_awards/` before any commercial use; the food tool then ranks by OpenStreetMap order.
 
-## Crowd-risk evidence
+#### Crowd-risk evidence
 
 `crowd_risk_check` compares day types with 2026 TRA station-entry counts through September 1. For each historical date, the [calibration script](scripts/calibrate_crowd_risk.py) divides total entries by the median on ordinary days of the same weekday within 56 days. A pattern needs at least five sampled days and a median ratio of 1.2 or higher for a high rating. The pre-break days meet that threshold; first and last days of long breaks do not. The [compact calibration](tools/data/crowd_calibration.json) is bundled, so normal lookups only download the annual calendar. Run `uv run python scripts/calibrate_crowd_risk.py` to refresh the calibration from the official files. Station entries are a network-wide proxy, not train occupancy, HSR demand, or a route-specific forecast.
 
-## Deploy
+### H. Deploy
 
 Cloud Run with continuous deploy from GitHub. Set `TDX_CLIENT_ID`, `TDX_CLIENT_SECRET`, and
 `CWA_API_KEY` as environment variables on the service. Keep max instances at 1: sessions are stored in memory.
 
-## Layout
+### I. Project layout
 
 ```
 app.py              routes, session store, Agents SDK agent and tools, sight pins
@@ -471,6 +529,8 @@ guardrails.py       input, output, and tool guardrails
 prompts/system.txt  system prompt (with {today} filled in on each turn)
 prompts/trip_context.txt  rules for extracting user-stated trip preferences
 tools/__init__.py   plain Python tool registry (TOOL_MAP + run_tool)
+tools/call_budget.py shared tool-call budget (5 per rolling minute)
+tools/english_labels.py English labels for calendar notes and CWA weather text
 tools/agent_tools.py typed @function_tool wrappers, generated schemas and execution adapter
 tools/tdx_client.py TDX token, caching, rate-limit handling, city names
 tools/tourism_data.py daily open-data files for attractions and restaurants, searched in memory
@@ -484,6 +544,6 @@ tools/attractions.py find_attractions (and pins for the places an answer recomme
 tools/weather.py    typhoon_backup_plan (CWA forecast and typhoon warnings)
 scripts/            builds for the bundled data (fame, extra sights, local favorites, OSM food, food awards)
 data/               source lists for builds (food awards, local-favorite review)
-static/             frontend (chat, tool cards, Leaflet map, trip board with train options)
+static/             frontend (questions and answers, lookup list, Leaflet map, trip notes, lookup meter)
 tests/              tool, harness, and guardrail tests
 ```

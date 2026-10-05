@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from tools import weather_planning
+from tools.english_labels import weather_en
 from tools.gov_tls import gov_session
 from tools.tdx_client import city_choices, resolve_city
 from tools.freshness import observe
@@ -95,6 +96,7 @@ def _forecast(location: dict, day: dt.date) -> dict | None:
             "start": starts.strftime("%H:%M"), "end": ends.strftime("%H:%M"),
             "start_at": starts.isoformat(), "end_at": ends.isoformat(),
             "weather": value("天氣現象", "Weather"), "rain_chance": rain,
+            "weather_en": weather_en(value("天氣現象", "Weather")),
             "min_temp_c": _as_int(value("最低溫度", "MinTemperature")),
             "max_temp_c": _as_int(value("最高溫度", "MaxTemperature")),
             "description": value("天氣預報綜合描述", "WeatherDescription"),
@@ -108,6 +110,7 @@ def _forecast(location: dict, day: dt.date) -> dict | None:
     return {
         "date": day.isoformat(),
         "weather": periods[0]["weather"],
+        "weather_en": periods[0]["weather_en"],
         "rain_chance": max(rain) if rain else None,
         "min_temp_c": min(lows) if lows else None,
         "max_temp_c": max(highs) if highs else None,

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import requests
 
+from tools.english_labels import holiday_en
 from tools.gov_tls import gov_session
 
 SOURCE = "https://data.gov.tw/dataset/14718"
@@ -188,7 +189,9 @@ def crowd_risk_check(start_date: str, end_date: str) -> str:
                 "weekday": day.strftime("%a"),
                 "is_holiday": row["is_holiday"],
                 "holiday_name": row["note"] if row["is_holiday"] and row["note"] else None,
+                "holiday_name_en": holiday_en(row["note"]) if row["is_holiday"] else None,
                 "calendar_note": row["note"] or None,
+                "calendar_note_en": holiday_en(row["note"]),
                 "calendar_pattern": day_type,
                 "risk": risk,
                 "reason": reason,

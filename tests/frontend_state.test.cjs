@@ -25,7 +25,7 @@ class Element {
     focus() {}
 }
 
-function harness(saved = {}, customFetch, vector = false, timers = {}) {
+function harness(saved = {}, customFetch, vector = false, timers = {}, quota = { limit: 5, remaining: 5, frees_in_seconds: [] }) {
     const elements = new Map();
     const get = (id) => {
         if (!elements.has(id)) elements.set(id, new Element("div"));
@@ -56,7 +56,9 @@ function harness(saved = {}, customFetch, vector = false, timers = {}) {
         sessionStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) },
         location: { reload() {} }, window: vector ? { maplibregl: {} } : {},
         DOMPurify: { sanitize: (text) => text }, marked: { parse: (text) => text },
-        fetch: customFetch || (async () => ({ ok: true, json: async () => ({ status: "active" }) })),
+        // /quota is answered here so tests can count only the requests they care about.
+        fetch: async (url, options) => url === "/quota" ? { ok: true, json: async () => quota }
+            : (customFetch || (async () => ({ ok: true, json: async () => ({ status: "active" }) })))(url, options),
         L: leaflet,
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8") +
@@ -249,4 +251,78 @@ test("refresh restores the transcript and scoped board", async () => {
     assert.match(get("messages").textContent, /Hello/);
     assert.match(get("weather-body").textContent, /Showers/);
     assert.equal(app.boardResults.size, 1);
+});
+
+const noTimers = { setTimeout: () => 1, clearTimeout() {} };
+const hasHan = (text) => /[㐀-鿿]/.test(text);
+
+test("an empty lookup budget disables Send and shows when the next lookup frees", async () => {
+    const { get, examples } = harness({}, undefined, false, noTimers, { limit: 5, remaining: 0, frees_in_seconds: [30, 40, 50, 55, 59] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(get("quota-text").textContent, /Next in 30 s/);
+    assert.equal(get("send-btn").disabled, true);
+    assert.ok(examples.every((button) => button.disabled));
+    assert.equal(get("user-input").disabled, false);
+});
+
+test("a partly used budget shows what is left and keeps Send available", async () => {
+    const { get } = harness({}, undefined, false, noTimers, { limit: 5, remaining: 3, frees_in_seconds: [12, 50] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(get("quota-text").textContent, /3 of 5 left · \+1 in 12 s/);
+    assert.equal(get("quota-meter").children.length, 5);
+    assert.equal(get("send-btn").disabled, false);
+});
+
+test("a refused question explains the wait and keeps the question for later", async () => {
+    const { app, get } = harness({}, async () => ({ ok: false, status: 429, json: async () => ({ detail: {
+        message: "Lookup limit reached. Please wait for the next free lookup.",
+        tool_quota: { limit: 5, remaining: 0, frees_in_seconds: [20] } } }) }), false, noTimers);
+    await app.send("Trains to Tainan?");
+    assert.match(get("messages").textContent, /Lookup limit reached.*Try again in 20 s/);
+    assert.equal(get("user-input").value, "Trains to Tainan?");
+    assert.equal(get("send-btn").disabled, true);
+    assert.equal(app.pending(), false);
+});
+
+test("a reply's quota updates the meter", async () => {
+    const { app, get } = harness({}, async () => ({ ok: true, json: async () => ({ session_id: "a", response: "Hi",
+        tool_calls: [], tool_quota: { limit: 5, remaining: 2, frees_in_seconds: [45, 50, 58] } }) }), false, noTimers);
+    await app.send("Hello");
+    assert.match(get("quota-text").textContent, /2 of 5 left/);
+});
+
+test("the trip notes show English for holidays, cities, licences and weather", () => {
+    const { app, get } = harness();
+    app.updateBoard([
+        call("crowd_risk_check", { start_date: "2026-10-09", end_date: "2026-10-10" }, { days: [
+            { date: "2026-10-09", weekday: "Fri", is_holiday: true, holiday_name: "國慶日補假", holiday_name_en: "National Day (observed)", risk: "medium" },
+            { date: "2026-10-10", weekday: "Sat", is_holiday: true, holiday_name: "新節日", holiday_name_en: null, risk: "low" },
+        ] }),
+        call("legal_stay_check", { city: "Hualien", name: "你來花蓮民宿" }, { mode: "check", is_registered: true,
+            matches: [{ name: "你來花蓮民宿", name_en: "Ni Lai Hualien B&B", license_number: "花蓮縣民宿2170號",
+                license_type: "Registered B&B / homestay (民宿)" }],
+            advice: "Ask the host for their license number (民宿登記證號 / 旅館登記證號) and check it." }),
+        call("typhoon_backup_plan", { city: "臺南市", date: "2026-10-12" }, { city: "臺南市", date: "2026-10-12",
+            forecast: { weather: "多雲", weather_en: "Partly cloudy", min_temp_c: 25, max_temp_c: 31 },
+            comparison: { reason: "Outdoor sightseeing is reasonable.", periods: [{ outing_start: "09:00", outing_end: "18:00",
+                rain_chance: 20, weather: "多雲", weather_en: "Partly cloudy", activity_preference: "outdoor" }] } }),
+    ]);
+    const dates = get("dates-body").textContent, stays = get("stay-body").textContent, weather = get("weather-body").textContent;
+    assert.match(dates, /National Day \(observed\)/);
+    assert.match(dates, /Public holiday/);
+    assert.match(stays, /Hualien B&B licence No\. 2170/);
+    assert.match(stays, /Registered B&B \/ homestay/);
+    assert.match(weather, /Tainan/);
+    assert.match(weather, /Partly cloudy/);
+    for (const text of [dates, stays, weather]) assert.equal(hasHan(text), false, text);
+});
+
+test("lookups are listed by kind without emoji or raw function names in the summary", async () => {
+    const calls = [call("find_local_food", { city: "Tainan", keyword: "beef soup" }, { results: [{}, {}] })];
+    const { app, get } = harness({}, async () => ({ ok: true, json: async () => ({ session_id: "a", response: "Try these.", tool_calls: calls }) }));
+    await app.send("Beef soup?");
+    const lookups = get("messages").children.find((child) => child.className === "tools");
+    const summary = lookups.children[1].children[0].textContent;
+    assert.match(summary, /Food beef soup in Tainan 2 results/);
+    assert.doesNotMatch(summary, /find_local_food|\p{Extended_Pictographic}/u);
 });

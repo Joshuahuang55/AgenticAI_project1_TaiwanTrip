@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools import attractions, food, tdx_client, tourism_data
+from tools import attractions, call_budget, food, tdx_client, tourism_data
 
 
 @pytest.fixture(autouse=True)
@@ -31,3 +31,12 @@ def no_extra_sights(monkeypatch):
 def no_live_tdx(monkeypatch):
     """An unmocked tdx_get answers 'credentials not configured' instead of calling TDX."""
     monkeypatch.setattr(tdx_client, "_get_token", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def roomy_tool_budget():
+    """Tests run many tool calls a minute; tests of the budget itself lower the limit."""
+    limit = call_budget.LIMIT
+    call_budget.reset(10_000)
+    yield
+    call_budget.reset(limit)

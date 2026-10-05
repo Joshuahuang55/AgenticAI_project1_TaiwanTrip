@@ -19,10 +19,85 @@ let resetGeneration = 0;
 
 function setPending(value) {
     pending = value;
-    sendBtn.disabled = value;
     input.disabled = value;
-    document.querySelectorAll(".example").forEach((button) => { button.disabled = value; });
+    updateSendState();
 }
+
+// Questions can be typed while the lookup budget is empty; only sending waits for a free lookup.
+function updateSendState() {
+    const blocked = pending || quotaAvailable() === 0;
+    sendBtn.disabled = blocked;
+    document.querySelectorAll(".example").forEach((button) => { button.disabled = blocked; });
+}
+
+// --- Lookup budget: tool calls per rolling minute, shared by every user of the server ---
+
+let quota = null;  // last /quota answer plus the local time it arrived
+let quotaTimer = null;
+let quotaRefreshing = false;
+
+function setQuota(value) {
+    if (!value || typeof value.limit !== "number" || typeof value.remaining !== "number") return;
+    quota = { ...value, frees_in_seconds: value.frees_in_seconds || [], at: Date.now() };
+    renderQuota();
+}
+
+// Slots whose minute has passed since the server answered are free again.
+function quotaSlots() {
+    if (!quota) return null;
+    const elapsed = (Date.now() - quota.at) / 1000;
+    const waits = quota.frees_in_seconds.map((s) => s - elapsed);
+    const freed = quota.remaining === quota.limit ? 0 : Math.min(quota.limit - quota.remaining, waits.filter((w) => w <= 0).length);
+    const upcoming = waits.filter((w) => w > 0);
+    return { limit: quota.limit, available: quota.remaining + freed, next: upcoming.length ? Math.ceil(Math.min(...upcoming)) : null, freed };
+}
+
+function quotaAvailable() {
+    const slots = quotaSlots();
+    return slots ? slots.available : null;
+}
+
+function quotaWaitText() {
+    const slots = quotaSlots();
+    return slots && slots.available === 0 && slots.next ? `Try again in ${slots.next} s.` : "";
+}
+
+function renderQuota() {
+    clearTimeout(quotaTimer);
+    const slots = quotaSlots();
+    if (!slots) return;
+    const meter = $("quota-meter");
+    meter.replaceChildren(...Array.from({ length: slots.limit }, (_, i) => el("i", i < slots.available ? "" : "used")));
+    let text = `${slots.available} of ${slots.limit} left`;
+    if (slots.available === 0) text = slots.next ? `Next in ${slots.next} s` : "None left";
+    else if (slots.next && slots.available < slots.limit) text += ` · +1 in ${slots.next} s`;
+    $("quota-text").textContent = text;
+    $("quota").classList.toggle("empty", slots.available === 0);
+    input.placeholder = slots.available === 0
+        ? "Lookup limit reached. You can type now and send when a lookup frees up."
+        : "Ask about a city, a stay, a train or a date";
+    updateSendState();
+    if (slots.freed) {
+        // Count the freed slot locally, then confirm with the server: other people share the budget.
+        const elapsed = (Date.now() - quota.at) / 1000;
+        quota = { ...quota, remaining: slots.available, at: Date.now(),
+            frees_in_seconds: quota.frees_in_seconds.map((s) => s - elapsed).filter((s) => s > 0) };
+        refreshQuota();
+    }
+    if (slots.next) quotaTimer = setTimeout(renderQuota, 1000);
+}
+
+async function refreshQuota() {
+    if (quotaRefreshing) return;
+    quotaRefreshing = true;
+    try {
+        const response = await fetch("/quota");
+        if (response.ok) setQuota(await response.json());
+    } catch {
+        // The meter is informational; the server still enforces the limit.
+    } finally { quotaRefreshing = false; }
+}
+window.addEventListener?.("focus", refreshQuota);
 
 function persist() {
     try {
@@ -34,18 +109,32 @@ function persist() {
     }
 }
 
+// Chinese text from official feeds is replaced with English; hasHan finds what still needs it.
+const hasHan = (text) => /[㐀-鿿]/.test(String(text ?? ""));
+const english = (text, fallback = "") => (text && !hasHan(text) ? String(text) : fallback);
+
 // How each tool looks in the chat and on the map. Unknown tools still render with defaults.
+// legend marks tools whose places are pinned on the map.
 const TOOL_META = {
-    legal_stay_check: { icon: "🏠", color: "#0f766e", label: "Stays", gist: (a) => a.name ? `is "${a.name}" registered?` : `registered ${a.type || "stays"} in ${a.city}` },
-    find_local_food: { icon: "🍜", color: "#c8102e", label: "Food", gist: (a) => `${a.keyword || "food"} in ${a.city}` },
-    twd_exchange: { icon: "💱", color: "#b45309", gist: (a) => `${a.amount} ${a.direction === "from_twd" ? "TWD → " + (a.currency || "USD") : (a.currency || "USD") + " → TWD"}` },
-    find_attractions: { icon: "🏯", color: "#7c3aed", label: "Sights", gist: (a) => `${a.keyword || "sights"} in ${a.city}` },
-    hsr_trip_planner: { icon: "🚄", color: "#2563eb", gist: (a) => `${a.origin} → ${a.destination} on ${a.date}` },
-    crowd_risk_check: { icon: "📅", color: "#be123c", gist: (a) => `${a.start_date} → ${a.end_date}` },
-    typhoon_backup_plan: { icon: "🌀", color: "#0369a1", label: "Weather", gist: (a) => `${a.city} on ${a.date}` },
-    get_weather: { icon: "🌤️", color: "#0369a1", gist: (a) => a.location },
+    legal_stay_check: { label: "Stays", color: "#1f6f5c", legend: true,
+        gist: (a) => a.name ? `Registration check${a.city ? " in " + cityLabel(a.city) : ""}` : `Registered ${a.type === "bnb" ? "B&Bs" : a.type === "hotel" ? "hotels" : "stays"} in ${cityLabel(a.city)}` },
+    find_local_food: { label: "Food", color: "#b3341f", legend: true, gist: (a) => `${english(a.keyword, "Food")} in ${cityLabel(a.city)}` },
+    twd_exchange: { label: "Money", color: "#8a5a00", gist: (a) => `${a.amount} ${a.direction === "from_twd" ? "TWD → " + (a.currency || "USD") : (a.currency || "USD") + " → TWD"}` },
+    find_attractions: { label: "Sights", color: "#5b3f8c", legend: true, gist: (a) => `${english(a.keyword, "Sights")} in ${cityLabel(a.city)}` },
+    hsr_trip_planner: { label: "Trains", color: "#1f4e79", gist: (a) => `${cityLabel(a.origin)} → ${cityLabel(a.destination)} on ${a.date}` },
+    crowd_risk_check: { label: "Dates", color: "#6b4226", gist: (a) => `${a.start_date} → ${a.end_date}` },
+    typhoon_backup_plan: { label: "Weather", color: "#2b6c8f", gist: (a) => `${cityLabel(a.city)} on ${a.date}` },
 };
-const metaFor = (name) => TOOL_META[name] || { icon: "🔧", color: "#6b7280", gist: (a) => JSON.stringify(a) };
+const metaFor = (name) => TOOL_META[name] || { label: "Lookup", color: "#77736b", gist: (a) => JSON.stringify(a) };
+
+// Short result size for the lookup list, e.g. "10 results".
+function resultCount(data) {
+    if (!data) return "";
+    if (data.error) return "Failed";
+    const list = data.results || data.stays || data.trains || data.days || data.matches;
+    if (Array.isArray(list)) return `${list.length} ${list.length === 1 ? "result" : "results"}`;
+    return "Done";
+}
 
 function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -92,18 +181,25 @@ function newSessionId() {
 function renderToolCalls(calls, before) {
     if (!calls.length) return;
     const wrap = el("div", "tools");
+    wrap.append(el("div", "tools-title", calls.length === 1 ? "1 lookup" : `${calls.length} lookups`));
     for (const call of calls) {
         const meta = metaFor(call.name);
         const data = parse(call.result);
         const card = el("details", "tool" + (data && data.error ? " error" : ""));
         const summary = el("summary");
-        summary.append(el("span", "icon", meta.icon), el("span", "name", call.name));
+        const kind = el("span", "kind", meta.label);
+        kind.style.setProperty("--c", meta.color);
         let gist = "";
         try { gist = meta.gist(call.args || {}); } catch {}
-        if (data && data.error) gist = "⚠ " + data.error;
-        summary.append(el("span", "gist", gist));
-        card.append(summary, el("div", "label", "arguments"), el("pre", "", JSON.stringify(call.args, null, 2)),
-            el("div", "label", "result"), el("pre", "", data ? JSON.stringify(data, null, 2) : call.result));
+        if (data && data.error) gist = data.error;
+        summary.append(kind, el("span", "gist", gist), el("span", "count", resultCount(data)));
+        // The raw request and response stay available for checking the agent's work.
+        const raw = el("div", "raw");
+        const requestLabel = el("div", "label", "Request ");
+        requestLabel.append(el("code", "", call.name));
+        raw.append(requestLabel, el("pre", "", JSON.stringify(call.args, null, 2)),
+            el("div", "label", "Response"), el("pre", "", data ? JSON.stringify(data, null, 2) : call.result));
+        card.append(summary, raw);
         wrap.appendChild(card);
     }
     messages.insertBefore(wrap, before);
@@ -127,7 +223,7 @@ async function send(text) {
         activeRequest = controller;
         deadline = setTimeout(() => controller.abort(), 190000);
         addMessage("user", text);
-        loading = addMessage("assistant", "Asking around like a local…");
+        loading = addMessage("assistant", "Looking this up…");
         loading.classList.add("loading");
         const res = await fetch("/chat", {
             method: "POST",
@@ -135,9 +231,20 @@ async function send(text) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: text, session_id: sessionId, new_session: newSession }),
         });
+        if (res.status === 429) {
+            // The shared lookup budget is spent: nothing ran, so the question can be asked again later.
+            const detail = (await res.json().catch(() => ({}))).detail || {};
+            if (generation !== resetGeneration) return;
+            setQuota(detail.tool_quota);
+            loading.classList.remove("loading");
+            loading.textContent = `${detail.message || "Lookup limit reached."} ${quotaWaitText()}`.trim();
+            input.value = text;
+            return;
+        }
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
         const data = await res.json();
         if (generation !== resetGeneration) return;
+        setQuota(data.tool_quota);
         if (data.session_status === "expired") {
             resetBoard();
             addMessage("assistant", "Your earlier server session expired. This is a new conversation.");
@@ -180,7 +287,7 @@ $("new-trip").addEventListener("click", async () => {
 $("panel-toggle").addEventListener("click", () => {
     const panel = $("panel");
     panel.classList.toggle("open");
-    $("panel-toggle").textContent = panel.classList.contains("open") ? "Hide trip board" : "Show trip board";
+    $("panel-toggle").textContent = panel.classList.contains("open") ? "Hide trip notes" : "Show trip notes";
     map?.invalidateSize();
 });
 
@@ -275,6 +382,31 @@ function cityScope(value) {
     const key = String(value || "").trim().toLowerCase().replaceAll("台", "臺").replaceAll("-", " ");
     return CITY_KEYS[key] || CITY_KEYS[key.replace(/ city$| county$/, "")] || key;
 }
+// English display names for the official Chinese city and county names.
+const CITY_NAMES = {};
+for (const [en, zh] of Object.entries(CITY_KEYS)) CITY_NAMES[zh] ??= en.replace(/\b\w/g, (c) => c.toUpperCase());
+function cityLabel(value) {
+    const text = String(value ?? "").trim();
+    if (!hasHan(text)) return text;
+    const key = text.replaceAll("台", "臺");
+    return CITY_NAMES[key] || CITY_NAMES[key + "市"] || CITY_NAMES[key + "縣"] || text;
+}
+
+// Drop Chinese glosses such as "Registered B&B (民宿)"; a fully Chinese text becomes the fallback.
+function withoutHan(text, fallback = "") {
+    const cleaned = String(text ?? "").replace(/\s*[(（][^)）]*[㐀-鿿][^)）]*[)）]/g, "").trim();
+    return english(cleaned, fallback);
+}
+
+// "花蓮縣民宿2170號" -> "Hualien B&B licence No. 2170".
+function licenseLabel(number) {
+    if (!number || !hasHan(number)) return number || "";
+    const digits = String(number).match(/\d+/g);
+    if (!digits) return "Registered licence";
+    const city = String(number).match(/^(..[縣市])/);
+    const kind = /民宿/.test(number) ? "B&B licence" : /觀光旅館/.test(number) ? "Tourist hotel licence" : /旅館/.test(number) ? "Hotel licence" : "Licence";
+    return `${city ? cityLabel(city[1]) + " " : ""}${kind} No. ${digits.join("-")}`;
+}
 
 // Find every {name, lat, lon} object anywhere in a tool result.
 function findPlaces(node, out = []) {
@@ -292,7 +424,7 @@ function addPins(call, data) {
     const meta = metaFor(call.name);
     const places = findPlaces(data);
     if (!places.length) return [];
-    if (meta.label && !legendSeen.has(call.name)) {
+    if (meta.legend && !legendSeen.has(call.name)) {
         legendSeen.add(call.name);
         const item = el("span", "", meta.label);
         item.style.setProperty("--c", meta.color);
@@ -300,15 +432,21 @@ function addPins(call, data) {
     }
     return places.map((p) => {
         const popup = el("div");
-        popup.append(el("b", "", `${meta.icon} ${displayName(p)}`));
-        for (const line of [p.license_number, p.address, p.reference_price_twd && `~${p.reference_price_twd} TWD/night`, p.open_time]) {
+        popup.append(el("b", "", displayName(p)));
+        // Chinese addresses and opening-hour notes are left to the map link.
+        for (const line of [licenseLabel(p.license_number), english(p.address), p.reference_price_twd && `From ${p.reference_price_twd} TWD a night`, english(p.open_time)]) {
             if (line) popup.append(el("br"), document.createTextNode(line));
         }
         const key = p.reference_id || `${call.name}:${p.name}:${p.lat}:${p.lon}`;
         if (markers.has(key)) pinLayer.removeLayer(markers.get(key));
         pinData.set(key, { ...p, kind: call.name });
-        if (p.role) popup.append(el("div", "", p.role === "alternative" ? "Alternative" : "Suggested stop"));
-        const marker = L.circleMarker([p.lat, p.lon], { radius: 7, color: "#fff", weight: 2, fillColor: meta.color, fillOpacity: 0.95 })
+        if (p.role) popup.append(el("div", "popup-role", p.role === "alternative" ? "Alternative" : "Suggested stop"));
+        const link = el("a", "", "Open in Google Maps");
+        link.href = p.map_url || `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
+        link.target = "_blank";
+        link.rel = "noopener";
+        popup.append(el("br"), link);
+        const marker = L.circleMarker([p.lat, p.lon], { radius: 7, color: "#fffdf8", weight: 2, fillColor: meta.color, fillOpacity: 1 })
             .bindPopup(popup)
             .addTo(pinLayer);
         markers.set(key, marker);
@@ -330,26 +468,33 @@ function showStay(data) {
     if (data.mode === "check") {
         const ok = data.is_registered;
         const top = ok === true ? data.matches?.[0] : null;
+        const candidates = data.match_status === "candidates";
         const v = el("div", "stay-verdict " + (ok ? "ok" : "warn"));
-        v.append(el("span", "big", ok ? "✅" : "⚠️"));
-        const txt = el("div");
-        txt.append(el("b", "", ok ? `Registered: ${displayName(top)}` : `No registration found for "${data.query}"`));
-        txt.append(el("small", "", ok ? `${top.license_number} · ${top.license_type}` : "Ask the host for their license number (登記證號)."));
-        v.append(txt);
-        box.append(v);
-        if (data.match_status === "candidates") {
-            txt.replaceChildren(el("b", "", "Similar registered properties found; choose the matching address."));
-            for (const candidate of data.matches || []) box.append(el("p", "", `${displayName(candidate)} · ${candidate.address || "Address unavailable"}`));
+        v.append(el("span", "tag", ok ? "Verified" : candidates ? "Check address" : "Not found"));
+        if (candidates) {
+            v.append(el("b", "", "Similar registered properties found; choose the matching address."));
+        } else {
+            v.append(el("b", "", ok ? `Registered: ${displayName(top)}` : `No registration found for "${english(data.query, "this stay")}"`));
+            v.append(el("small", "", ok ? [licenseLabel(top.license_number), withoutHan(top.license_type, "Registered lodging")].filter(Boolean).join(" · ")
+                : "Ask the host for their licence number."));
         }
-        if (data.note || data.advice) box.append(el("small", "", data.note || data.advice));
+        box.append(v);
+        if (candidates) {
+            for (const candidate of data.matches || []) {
+                box.append(el("div", "candidate", `${displayName(candidate)} · ${english(candidate.address, cityLabel(candidate.district) || "Address in Chinese only")}`));
+            }
+        }
+        const note = withoutHan(data.note || data.advice);
+        if (note) box.append(el("small", "", note));
     } else if (data.stays) {
         const list = el("ul", "stay-list");
         for (const s of data.stays) {
             const li = el("li");
-            li.append(el("b", "", displayName(s)));
-            if (s.taiwan_host_certified) li.append(el("span", "badge", "Taiwan Host"));
-            li.append(el("div", "lic", `✔ ${s.license_number}`));
-            if (s.reference_price_twd) li.append(el("div", "", `~${s.reference_price_twd} TWD / night`));
+            const name = el("b", "", displayName(s));
+            if (s.taiwan_host_certified) name.append(el("span", "badge", "Taiwan Host"));
+            li.append(name);
+            li.append(el("span", "price", s.reference_price_twd ? `from ${s.reference_price_twd} TWD` : "Rate not listed"));
+            li.append(el("div", "lic", licenseLabel(s.license_number)));
             list.append(li);
         }
         box.append(list);
@@ -362,9 +507,18 @@ function showBudget(data) {
     const b = el("div", "budget");
     b.append(el("span", "from", `${data.amount.toLocaleString()} ${data.direction === "to_twd" ? data.currency : "TWD"} =`),
         el("span", "to", `${data.converted_amount.toLocaleString()} ${data.converted_currency}`));
-    const trend = data.diff_percent > 0 ? `▲ ${data.diff_percent}%` : data.diff_percent < 0 ? `▼ ${Math.abs(data.diff_percent)}%` : "flat";
-    boardNode("budget-body").replaceChildren(b, el("div", "budget-meta", `${data.rate_text} on ${data.rate_date} · weekly samples over four weeks: ${data.diff_percent == null ? "Comparison unavailable" : trend}`));
+    const trend = data.diff_percent > 0 ? `up ${data.diff_percent}%` : data.diff_percent < 0 ? `down ${Math.abs(data.diff_percent)}%` : "flat";
+    boardNode("budget-body").replaceChildren(b, el("div", "budget-meta", `${data.rate_text} on ${data.rate_date} · against weekly samples over four weeks: ${data.diff_percent == null ? "Comparison unavailable" : trend}`));
     boardNode("budget-card").hidden = false;
+}
+
+const RISK_LABELS = { high: "Busy", medium: "Moderate", low: "Normal" };
+
+// Holiday names come translated from the server; anything left in Chinese gets a generic label.
+function dayLabel(d) {
+    if (d.is_holiday || d.holiday_name) return english(d.holiday_name_en, english(d.holiday_name, "Public holiday"));
+    if (d.calendar_pattern === "working_weekend") return english(d.calendar_note_en, "Make-up workday");
+    return RISK_LABELS[d.risk] || "";
 }
 
 function showDates(data) {
@@ -374,22 +528,24 @@ function showDates(data) {
     strip.replaceChildren();
     for (const d of days) {
         const cell = el("div", "day " + (d.risk || ""));
-        cell.title = d.reason || d.holiday_name || "";
-        cell.append(el("span", "", d.weekday || ""), el("b", "", (d.date || "").slice(5)), el("span", "", d.holiday_name || d.risk || ""));
+        const label = dayLabel(d);
+        cell.title = [label, RISK_LABELS[d.risk] && `Travel pressure: ${RISK_LABELS[d.risk].toLowerCase()}`, english(d.reason)].filter(Boolean).join(". ");
+        cell.append(el("span", "wd", d.weekday || ""), el("b", "", (d.date || "").slice(5)), el("span", "what", label));
         strip.append(cell);
     }
-    boardNode("dates-note").textContent = data.risk_basis || "";
+    boardNode("dates-note").textContent = english(data.risk_basis);
     boardNode("dates-card").hidden = false;
 }
 
 function showTrains(data) {
     const body = boardNode("train-body");
-    const route = el("div", "train-route", `${data.rail} · ${data.origin} → ${data.destination} · ${data.date}`);
+    // The section heading names the route and date; this line adds the service.
+    const route = el("div", "train-route", data.rail === "TRA" ? "Taiwan Railway (TRA)" : data.rail === "THSR" ? "High Speed Rail (THSR)" : english(data.rail));
     const list = el("ul", "train-list");
     for (const train of data.trains || []) {
         const item = el("li");
         item.append(el("div", "train-time", `${train.departure} → ${train.arrival}`));
-        item.append(el("div", "train-type", `${train.train_type || "Type unavailable"} · Train ${train.train_no}`));
+        item.append(el("div", "train-type", `${withoutHan(train.train_type, "Train")} ${train.train_no}`));
         item.append(el("div", "train-fare", train.fare_twd == null ? "Fare unavailable" : `${train.fare_twd.toLocaleString()} TWD`));
         list.append(item);
     }
@@ -398,24 +554,35 @@ function showTrains(data) {
     boardNode("train-card").hidden = false;
 }
 
+const OUTING_ADVICE = { indoor: "Indoors", flexible: "Flexible", outdoor: "Outdoors fine" };
+
 function showWeather(data) {
     const comparison = data.comparison || {};
     const bad = data.is_bad_weather === true;
     const f = data.forecast || {};
     const text = comparison.reason || data.seasonal_note || (data.typhoon_alert
         ? "An active typhoon warning is in effect. Follow official updates."
-        : f.weather || "Forecast unavailable.");
-    const details = [el("div", "alert" + (bad ? "" : " calm"), `${bad ? "⚠ " : ""}${text}`)];
-    details.unshift(el("b", "", `${data.city || ""} · ${data.date || ""}`));
+        : english(f.weather_en, "See the answer for the forecast."));
+    // The section heading names the city and date.
+    const head = el("div", "weather-head");
+    head.append(el("b", "", english(f.weather_en, data.forecast ? "Forecast" : "No forecast yet")));
+    if (f.min_temp_c != null && f.max_temp_c != null) head.append(el("span", "weather-temp", `${f.min_temp_c}–${f.max_temp_c} °C`));
+    const details = [head];
+    details.push(el("div", "alert" + (bad ? "" : " calm"), english(text, "Forecast unavailable.")));
     if (comparison.outing_window) {
         const w = comparison.outing_window;
-        details.push(el("div", "", `Outing: ${w.start}–${w.end} (Taiwan time)`));
+        details.push(el("div", "weather-extra", `Outing: ${w.start}–${w.end} (Taiwan time)`));
     }
+    const periods = el("ul", "periods");
     for (const p of comparison.periods || []) {
-        const rain = p.rain_chance == null ? "Rain chance unavailable" : `Rain chance ${p.rain_chance}%`;
-        details.push(el("div", "", `${p.outing_start}–${p.outing_end}: ${rain} · ${p.activity_preference}`));
+        const row = el("li");
+        row.append(el("span", "", `${p.outing_start}–${p.outing_end}`),
+            el("span", "advice", [english(p.weather_en), OUTING_ADVICE[p.activity_preference]].filter(Boolean).join(" · ")),
+            el("span", "rain", p.rain_chance == null ? "n/a" : `${p.rain_chance}%`));
+        periods.append(row);
     }
-    if (comparison.warning_note) details.push(el("div", "", comparison.warning_note));
+    if (periods.children.length) details.push(el("div", "label-row", "Rain chance by forecast period"), periods);
+    if (comparison.warning_note) details.push(el("div", "weather-extra", comparison.warning_note));
     boardNode("weather-body").replaceChildren(...details);
     boardNode("weather-card").hidden = false;
 }
@@ -536,4 +703,5 @@ async function restore() {
         addMessage("assistant", "Could not restore the earlier conversation. Please refresh to retry.");
     } finally { setPending(false); input.focus(); }
 }
+refreshQuota();
 restore();
