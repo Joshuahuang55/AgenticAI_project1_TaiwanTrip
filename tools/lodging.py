@@ -4,6 +4,7 @@ import json
 import re
 
 from tools import lodging_preferences
+from tools.english_labels import english_name
 from tools.tdx_client import city_choices, odata_quote, resolve_city, tdx_get
 
 HOTEL_PATH = "tourism/service/odata/V2/Tourism/Hotel"
@@ -39,7 +40,8 @@ def _summarize(h: dict) -> dict:
     low, high = prices["minimum"], prices["maximum"]
     return {
         "name": h.get("HotelName"),
-        "name_en": h.get("HotelNameEn"),
+        # The register lists many stays in Chinese only; romanize so every stay has an English name.
+        "name_en": h.get("HotelNameEn") or english_name(h.get("HotelName")),
         "license_number": h.get("HotelLicenseNumber"),
         "license_type": LICENSE_TYPES.get(classes[0], "Registered lodging") if classes else "Registered lodging",
         "address": f"{addr.get('City', '')}{addr.get('Town', '')}{addr.get('StreetAddress', '')}",

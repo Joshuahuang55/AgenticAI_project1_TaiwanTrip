@@ -294,9 +294,10 @@ $("panel-toggle").addEventListener("click", () => {
 // --- Trip board ---
 
 const map = typeof L === "undefined" ? null : L.map("map", { scrollWheelZoom: false }).setView([23.7, 120.95], 7);
-// Keep a usable map visible while the optional vector renderer loads.
-const raster = map && L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 18, attribution: "&copy; OpenStreetMap contributors",
+// A label-free basemap shows while the English vector map loads, and stays if it fails, so the
+// map never shows Chinese labels. Pins carry their own English names.
+const raster = map && L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 16, attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors",
 }).addTo(map);
 let basemap = raster;
 
@@ -321,7 +322,7 @@ async function loadBasemap() {
         clearTimeout(deadline);
         controller.abort();
         // Set the message first so even a renderer cleanup error cannot leave "Loading…".
-        $("map-note").textContent = "English map unavailable; showing the standard map with local labels";
+        $("map-note").textContent = "English map unavailable; showing the standard map without labels";
         if (vector) {
             try { map.removeLayer(vector); } catch {}
         }
@@ -346,10 +347,11 @@ async function loadBasemap() {
         for (const layer of style.layers) {
             const field = layer.layout?.["text-field"];
             if (!field || !JSON.stringify(field).includes("name")) continue;
-            const names = ["name:en", "name_en", "name:latin"];
+            // English, then romanized names (name_int is Latin in OpenMapTiles); never the local script.
+            const names = ["name:en", "name_en", "name_int", "name:latin"];
             layer.layout["text-field"] = ["case", ...names.flatMap((name) => [
                 ["!=", ["coalesce", ["get", name], ""], ""], ["get", name],
-            ]), ["get", "name"]];
+            ]), ""];
         }
         vector = L.maplibreGL({ style }).addTo(map);
         const renderer = vector.getMaplibreMap();
@@ -359,7 +361,7 @@ async function loadBasemap() {
             clearTimeout(deadline);
             basemap = vector;
             map.removeLayer(raster);
-            $("map-note").textContent = "English labels where available";
+            $("map-note").textContent = "English labels; places without an English name are unlabeled";
         };
         renderer.once("load", ready);
         // Already-loaded renderers and cached styles need no second load event.
@@ -376,7 +378,9 @@ const pinData = new Map();
 const boardResults = new Map();
 let boardTargets = {};
 const boardNode = (id) => boardTargets[id] || $(id);
-const displayName = (place) => place.label || place.name_en || place.name || "Place";
+// Prefer an English name; the server romanizes Chinese-only listings into name_en.
+const displayName = (place) => english(place.label) || english(place.name_en) || english(place.name)
+    || place.name_en || place.label || place.name || "Place";
 const CITY_KEYS = {"taipei": "臺北市", "new taipei": "新北市", "taoyuan": "桃園市", "taichung": "臺中市", "tainan": "臺南市", "kaohsiung": "高雄市", "keelung": "基隆市", "hsinchu": "新竹市", "hsinchu county": "新竹縣", "miaoli": "苗栗縣", "changhua": "彰化縣", "nantou": "南投縣", "yunlin": "雲林縣", "chiayi": "嘉義市", "chiayi county": "嘉義縣", "pingtung": "屏東縣", "yilan": "宜蘭縣", "hualien": "花蓮縣", "taitung": "臺東縣", "penghu": "澎湖縣", "kinmen": "金門縣", "matsu": "連江縣", "lienchiang": "連江縣"};
 function cityScope(value) {
     const key = String(value || "").trim().toLowerCase().replaceAll("台", "臺").replaceAll("-", " ");

@@ -112,7 +112,7 @@ test("failed English-city search clears pins from canonical Chinese-city results
     assert.equal(layer.items.length, 0);
 });
 
-test("vector labels prefer English and retain street-number labels", async () => {
+test("vector labels are English or romanized, never the local script, and keep street numbers", async () => {
     const style = { layers: [
         { id: "city", layout: { "text-field": ["get", "name"] } },
         { id: "road-shield", layout: { "text-field": ["get", "ref"] } },
@@ -130,9 +130,10 @@ test("vector labels prefer English and retain street-number labels", async () =>
     }
     assert.equal(evaluate(expression, { name_en: "Taipei", name: "臺北" }), "Taipei");
     assert.equal(evaluate(expression, { name_en: "", "name:latin": "Taipei", name: "臺北" }), "Taipei");
-    assert.equal(evaluate(expression, { name: "臺北" }), "臺北");
+    assert.equal(evaluate(expression, { name_int: "Taibei", name: "臺北" }), "Taibei");
+    assert.equal(evaluate(expression, { name: "臺北" }), "");
     assert.deepEqual(style.layers[1].layout["text-field"], ["get", "ref"]);
-    assert.match(get("map-note").textContent, /English labels where available/);
+    assert.match(get("map-note").textContent, /English labels/);
 });
 
 test("stalled vector readiness exits loading without losing the standard map", async () => {
@@ -325,4 +326,14 @@ test("lookups are listed by kind without emoji or raw function names in the summ
     const summary = lookups.children[1].children[0].textContent;
     assert.match(summary, /Food beef soup in Tainan 2 results/);
     assert.doesNotMatch(summary, /find_local_food|\p{Extended_Pictographic}/u);
+});
+
+test("listing names on the map and stay list prefer English over a Chinese label", () => {
+    const { app, get, layer } = harness();
+    app.updateBoard([call("legal_stay_check", { city: "Tainan" }, { stays: [
+        { name: "你來民宿", name_en: "Nilai B&B", license_number: "臺南市民宿100號" }] })],
+        [{ kind: "find_local_food", city: "Tainan", name: "西羅殿牛肉湯", label: "西羅殿牛肉湯", name_en: "Xiluodian Beef Soup", lat: 23, lon: 120.2 }]);
+    assert.match(get("stay-body").textContent, /Nilai B&B/);
+    assert.match(layer.items[0].popup.textContent, /Xiluodian Beef Soup/);
+    assert.equal(hasHan(get("stay-body").textContent + layer.items[0].popup.textContent), false);
 });
