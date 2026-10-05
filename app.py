@@ -45,7 +45,7 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
 load_dotenv()
 
 from tools import run_tool  # noqa: E402  (tools read credentials from the environment)
-from tools import attractions, food, tourism_data  # noqa: E402
+from tools import attractions, call_budget, food, tourism_data  # noqa: E402
 from tools.agent_tools import build_tools  # noqa: E402
 import guardrails  # noqa: E402
 from guardrails import ChatState  # noqa: E402
@@ -216,6 +216,7 @@ class ChatResponse(BaseModel):
     map_pins: list[dict] = []
     session_status: str = "active"
     places: list[dict] = []
+    tool_quota: dict = {}
 
 
 @app.get("/")
@@ -225,6 +226,11 @@ def index():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
+    quota = call_budget.status()
+    if quota["remaining"] == 0:
+        # Every lookup would fail; refuse before spending model calls on an answer without data.
+        raise HTTPException(429, {"message": "Lookup limit reached. Please wait for the next free lookup.",
+                                  "tool_quota": quota})
     prior = sessions.get(request.session_id)
     expired = bool(request.session_id and not request.new_session and (prior is None or prior.invalidated or
                    (not prior.active_requests and time.monotonic() - prior.last_used > SESSION_TTL_SECONDS)))
@@ -277,11 +283,17 @@ async def chat(request: ChatRequest):
         if state.invalidated and not state.active_requests:
             clear(session_id)
     return ChatResponse(response=response, session_id=session_id, tool_calls=tool_calls,
-                        map_pins=map_pins, places=places, session_status="expired" if expired else "active")
+                        map_pins=map_pins, places=places, session_status="expired" if expired else "active",
+                        tool_quota=call_budget.status())
 
 
 def public_calls(state):
     return [{k: call[k] for k in ("name", "args", "result")} for call in state.turn_calls()]
+
+
+@app.get("/quota")
+def tool_quota():
+    return call_budget.status()
 
 
 @app.get("/session/{session_id}")

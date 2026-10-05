@@ -64,6 +64,7 @@ def test_tra_calibration_highlights_pre_break_eve(fake_calendars):
         "high", "medium", "medium", "medium", "low",
     ]
     assert days["2026-10-09"]["holiday_name"] == "國慶日補假"
+    assert days["2026-10-09"]["holiday_name_en"] == "National Day (observed)"
     assert days["2026-10-08"]["historical_tra_evidence"] == {
         "tra_median_ratio": 1.266, "sample_days": 5,
     }

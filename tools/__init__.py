@@ -3,7 +3,7 @@
 import json
 
 from tools import attractions, exchange, food, holidays, lodging, transport, weather
-from tools import freshness
+from tools import call_budget, freshness
 
 _MODULES = [
     lodging.legal_stay_check,
@@ -23,6 +23,14 @@ def run_tool(name: str, args: dict) -> str:
     """Run one tool call. Models invent tool names and arguments; never let that crash the loop."""
     if name not in TOOL_MAP:
         return json.dumps({"error": f"Unknown tool '{name}'. Available: {list(TOOL_MAP)}"})
+    granted, wait = call_budget.acquire()
+    if not granted:
+        return json.dumps({
+            "error": f"Lookup limit reached ({call_budget.LIMIT} tool calls per minute).",
+            "hint": f"Do not retry this turn. Answer with results already gathered and tell the user "
+                    f"new lookups resume in about {wait} seconds.",
+            "retry_after_seconds": wait,
+        })
     try:
         token = freshness.begin()
         try:

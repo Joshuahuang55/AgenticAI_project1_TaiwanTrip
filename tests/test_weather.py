@@ -75,6 +75,7 @@ def test_fine_day_has_forecast_and_no_backups(fake):
     f = out["forecast"]
     assert (f["weather"], f["rain_chance"], f["min_temp_c"], f["max_temp_c"]) == ("晴時多雲", 20, 26, 32)
     assert len(f["periods"]) == 2 and f["description"].startswith("晴時多雲")
+    assert f["weather_en"] == "Sunny, at times partly cloudy" and f["periods"][1]["weather_en"] == "Partly cloudy"
     assert out["is_bad_weather"] is False and out["typhoon_alert"] is None and out["backup_spots"] == []
     assert cwa_calls[0] == (weather.WEEK_FORECAST, {"LocationName": "臺南市"})
     assert tdx_calls == []  # no TDX spend on a fine day
