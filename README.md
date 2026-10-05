@@ -33,16 +33,19 @@ you press **New trip**, and ends each answer with a suggestion for what to ask n
 
 Lookups are shared and capped at **5 per minute**; the meter in the header shows how many are left.
 
-**Sample queries**
+**Sample queries** (also the three buttons on the start screen; ask them in order in one chat)
 
-1. `I found a cheap B&B in Hualien called "你來花蓮民宿". Is it legal? Can you suggest some registered ones?`
-   → `legal_stay_check` confirms its licence, then lists registered alternatives on the map.
-2. `I'm taking the train from Taipei to Tainan on Oct 8, 2026. Will the holiday make travel busy?`
-   → `crowd_risk_check` flags Oct 8, the eve of the National Day break, as busy; `hsr_trip_planner` lists trains and fares.
+1. `Find registered B&Bs in Hualien under 3,000 TWD a night.`
+   → `legal_stay_check` ranks registered B&Bs by reported starting rate under the cap, with licence
+   numbers and districts. They appear in **Trip notes → Stays**.
+2. `I have $1,500 USD for a week. How much is that in TWD?`
+   → `twd_exchange` converts at today's mid-market rate and compares it with the
+   last four weeks. The answer remembers the 3,000 TWD B&B budget from query 1 and works out a daily budget.
 3. `What should I eat in Tainan? I want beef soup for breakfast and a night market in the evening.`
-   → `find_local_food` for beef soup and for night markets, with the nights each rotating market opens.
+   → `find_local_food` runs twice: beef soup spots (Michelin and 500 Bowls picks) and night markets,
+   including the evenings each rotating market opens. Both lists appear in **Trip notes → Food**.
 
-Try a follow-up in the same chat, such as `Is the second one registered?` or `Will it rain that day?`
+Each answer ends with a **Next:** suggestion you can type as a follow-up, such as `What are some good food spots in Hualien City?`
 
 ## What we built beyond the starter
 
