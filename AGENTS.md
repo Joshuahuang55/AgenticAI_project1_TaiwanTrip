@@ -11,7 +11,7 @@
 - `uv sync --locked --group dev`: install dependencies without changing `uv.lock`.
 - `uv run python scripts/calibrate_crowd_risk.py`: refresh crowd calibration.
 
-Copy `.env.example` to `.env`; configure TDX, CWA, and Google Cloud credentials per `README.md`. `Procfile` defines deployment; the frontend needs no build.
+Copy `.env.example` to `.env`; configure TDX, CWA, and Google Cloud credentials per `README.md` (details in `docs/DESIGN.md`). `Procfile` defines deployment; the frontend needs no build.
 `.python-version` selects Python 3.13 (the newest Google Cloud buildpacks support; 3.11 fails to deploy); `uv sync` creates `.venv` without manual activation.
 Keep `pyproject.toml` and `uv.lock` aligned, and use Node.js 22+ for the frontend checks.
 Fresh environment installation requires no API credentials; live use needs each contributor's
@@ -43,7 +43,7 @@ The main agent uses `TravelReply` in `agent_reply.py`. Keep its schema small; va
 
 ## Coding Style & Naming Conventions
 
-Use four spaces and Python `snake_case`. Register plain domain functions in `tools/__init__.py` and typed `@function_tool` wrappers in `tools/agent_tools.py`; generate schemas from annotations and Google-style `Args` docstrings, not handwritten `SCHEMA` dictionaries. Keep wrapper signatures/defaults aligned with domain functions, prompt, and README. Use `Literal` for choices and `Annotated`/`Field` for numeric bounds. Gemini wrappers keep `strict_mode=False` for optional arguments; SDK validation errors still need recorded JSON replies. Preserve worker-thread execution, session restoration, and tool guardrails in the shared adapter. Return `error` and `hint` for recoverable failures. Follow nearby frontend style; no formatter/linter is configured.
+Use four spaces and Python `snake_case`. Register plain domain functions in `tools/__init__.py` and typed `@function_tool` wrappers in `tools/agent_tools.py`; generate schemas from annotations and Google-style `Args` docstrings, not handwritten `SCHEMA` dictionaries. Keep wrapper signatures/defaults aligned with domain functions, prompt, README, and `docs/DESIGN.md`. Use `Literal` for choices and `Annotated`/`Field` for numeric bounds. Gemini wrappers keep `strict_mode=False` for optional arguments; SDK validation errors still need recorded JSON replies. Preserve worker-thread execution, session restoration, and tool guardrails in the shared adapter. Return `error` and `hint` for recoverable failures. Follow nearby frontend style; no formatter/linter is configured.
 
 Food comparisons in `tools/food_preferences.py` prioritize dietary reports and indications before price/awards, keeping unknown facts distinct from reported matches. Preserve evidence/provenance; relative bands never verify exact meal budgets. Present choices and practical comparisons first; keep status labels internal and consolidate relevant gaps into one short note. Pass criteria through name lookups; exclude conflicts and, with explicit `confirmed_only`, unknown matches. District matches do not establish landmark proximity.
 
@@ -59,7 +59,7 @@ Weather comparisons use overlapping CWA intervals, aligning elements by timestam
 
 Use `test_*.py` and `test_*` functions. `tests/conftest.py` disables daily downloads, real ranking data, and live TDX authentication. Use `tests/test_app.py`'s scripted model for SDK/guardrail checks, `tests/test_agent_tools.py` for generated schemas and validation, `tests/test_trip_context.py` for sessions, `tests/test_food_preferences.py` for food comparisons, and `tests/test_tourism_data.py` for loaders/ranking. Mock HTTP and model calls. After prompt edits, inspect real `/chat` behavior separately. Run pytest before PRs; no coverage threshold exists. CI also runs the dependency-free Node frontend checks (`node --test tests/frontend_state.test.cjs`); mocked TDX token/cache/retry checks live in `tests/test_tdx_client.py`.
 
-Scope board cards by route/date/location, including errors and empty results. Deduplicate/reconcile proposed map pins and prefer English labels; the OpenFreeMap vector basemap falls back to local names when no translation exists, or a labeled raster map when rendering fails.
+Scope board cards by route/date/location, including errors and empty results. Deduplicate/reconcile proposed map pins and show English names only (`english_name` romanizes Chinese-only listings); the OpenFreeMap vector basemap uses English or romanized labels and leaves others unlabeled, over a label-free Esri Light Gray raster that also serves as the fallback.
 Keep optional map assets asynchronous with a bounded loading deadline. Formatting/storage/map
 failures must not block chat, and every send path must release the pending state in `finally`.
 
@@ -67,7 +67,7 @@ Check mode must distinguish uniquely matched lodging from similar-name candidate
 
 ## Data Maintenance
 
-Tourism files refresh in the background daily, using saved data in ignored `data/daily/` and TDX fallback. Hotels/rail use TDX. Run ranking builders (`build_fame.py`, `build_osm_food.py`, `build_food_fame.py` in `scripts/`) only for intentional refreshes; some invoke paid models. Review generated names/labels and preserve source/license metadata, including README's education-use restrictions.
+Tourism files refresh in the background daily, using saved data in ignored `data/daily/` and TDX fallback. Hotels/rail use TDX. Run ranking builders (`build_fame.py`, `build_osm_food.py`, `build_food_fame.py` in `scripts/`) only for intentional refreshes; some invoke paid models. Review generated names/labels and preserve source/license metadata, including the education-use restrictions in README and `docs/DESIGN.md`. Keep README short (what graders need); put detail in `docs/DESIGN.md`.
 
 ## API Limits & Live-Request Rules
 
