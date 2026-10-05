@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import OrderedDict
@@ -46,6 +47,7 @@ load_dotenv()
 
 from tools import run_tool  # noqa: E402  (tools read credentials from the environment)
 from tools import attractions, call_budget, food, tourism_data  # noqa: E402
+from tools.english_labels import english_name  # noqa: E402
 from tools.agent_tools import build_tools  # noqa: E402
 import guardrails  # noqa: E402
 from guardrails import ChatState  # noqa: E402
@@ -64,6 +66,7 @@ MAX_SESSIONS = 200
 MAX_KEPT_TOOL_CALLS = 100
 SESSION_TTL_SECONDS = 6 * 60 * 60
 TURN_TIMEOUT_SECONDS = 180
+HAN = re.compile(r"[\u3400-\u9fff]")
 MODEL_RATE_LIMIT_MESSAGE = "The AI service is currently busy or rate-limited. Please wait a moment and try again."
 
 # Output moderation by Gemini: block medium-or-higher harm in every category, not the model default.
@@ -253,11 +256,14 @@ async def chat(request: ChatRequest):
                 if state.reply:
                     places = state.reply.places
                     for place in state.reply.places:
+                        # Labels follow the answer's language; pins always show an English name.
+                        label = place["label"] if place["label"] and not HAN.search(place["label"]) else (
+                            english_name(place.get("name") or place["label"]))
                         module = {"find_attractions": attractions, "find_local_food": food}.get(place["tool"])
                         if place.get("lat") is not None and place.get("lon") is not None:
-                            map_pins.append(dict(place, kind=place["tool"], name_en=place["label"]))
+                            map_pins.append(dict(place, kind=place["tool"], name_en=label))
                         elif module and place.get("name"):
-                            map_pins += [dict(p, kind=place["tool"], name_en=place["label"],
+                            map_pins += [dict(p, kind=place["tool"], name_en=label,
                                               city=place.get("city"), reference_id=place["reference_id"], role=place["role"])
                                          for p in module.pins_from_names([place["name"]])]
             except litellm.RateLimitError:

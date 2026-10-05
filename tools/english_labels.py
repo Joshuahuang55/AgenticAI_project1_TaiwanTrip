@@ -1,10 +1,14 @@
-"""English labels for Chinese text that official feeds return (calendar notes, CWA weather).
+"""English labels for Chinese text that official feeds return (calendar notes, CWA weather,
+listing names).
 
-Each function returns None when it cannot translate the whole text, so callers never show a
-half-translated label; the frontend then uses a generic English label.
+holiday_en and weather_en return None when they cannot translate the whole text, so callers
+never show a half-translated label. english_name always returns Latin text: known words are
+translated and the rest is romanized with Hanyu Pinyin, Taiwan's official romanization.
 """
 
 import re
+
+from pypinyin import Style, lazy_pinyin
 
 # Longest names first so "農曆除夕" wins over "除夕".
 HOLIDAYS = sorted({
@@ -104,3 +108,85 @@ def weather_en(text: str | None) -> str | None:
         return None
     label = " with ".join([parts[0], " and ".join(parts[1:])]) if len(parts) > 1 else parts[0]
     return label[0].upper() + label[1:]
+
+
+# Words translated inside listing names; longest first so "大飯店" wins over "飯店".
+NAME_WORDS = sorted({
+    # Places
+    "臺北": "Taipei", "新北": "New Taipei", "桃園": "Taoyuan", "臺中": "Taichung", "臺南": "Tainan",
+    "高雄": "Kaohsiung", "基隆": "Keelung", "新竹": "Hsinchu", "苗栗": "Miaoli", "彰化": "Changhua",
+    "南投": "Nantou", "雲林": "Yunlin", "嘉義": "Chiayi", "屏東": "Pingtung", "宜蘭": "Yilan",
+    "花蓮": "Hualien", "臺東": "Taitung", "澎湖": "Penghu", "金門": "Kinmen", "馬祖": "Matsu",
+    "墾丁": "Kenting", "九份": "Jiufen", "淡水": "Tamsui", "日月潭": "Sun Moon Lake", "阿里山": "Alishan",
+    "太魯閣": "Taroko", "安平": "Anping", "西門": "Ximen", "鹿港": "Lukang", "礁溪": "Jiaoxi",
+    "北投": "Beitou", "士林": "Shilin", "信義": "Xinyi", "大稻埕": "Dadaocheng", "知本": "Zhiben",
+    # Stays
+    "國際觀光旅館": "International Hotel", "觀光大飯店": "Hotel", "大飯店": "Hotel", "飯店": "Hotel",
+    "大酒店": "Hotel", "酒店": "Hotel", "青年旅館": "Hostel", "青年旅舍": "Hostel", "背包客棧": "Hostel",
+    "膠囊旅館": "Capsule Hotel", "商務旅館": "Business Hotel", "商旅": "Business Hotel", "旅館": "Hotel",
+    "旅店": "Inn", "旅社": "Inn", "客棧": "Inn", "會館": "Hotel", "渡假村": "Resort", "度假村": "Resort",
+    "民宿": "B&B", "文旅": "Hotel", "溫泉": "Hot Spring",
+    # Food
+    "牛肉湯": "Beef Soup", "牛肉麵": "Beef Noodles", "擔仔麵": "Danzai Noodles", "肉圓": "Bawan",
+    "滷肉飯": "Braised Pork Rice", "魯肉飯": "Braised Pork Rice", "雞肉飯": "Chicken Rice",
+    "蚵仔煎": "Oyster Omelet", "臭豆腐": "Stinky Tofu", "豆花": "Douhua", "刈包": "Gua Bao",
+    "小籠包": "Xiaolongbao", "水煎包": "Pan-fried Buns", "鍋貼": "Potstickers", "水餃": "Dumplings",
+    "粥": "Congee", "米糕": "Rice Cake", "碗粿": "Wa Gui", "火鍋": "Hot Pot", "燒烤": "BBQ",
+    "海鮮": "Seafood", "素食": "Vegetarian", "早餐": "Breakfast", "小吃": "Snacks", "冰品": "Shaved Ice",
+    "剉冰": "Shaved Ice", "茶飲": "Tea", "咖啡": "Cafe", "餐廳": "Restaurant", "餐館": "Restaurant",
+    "食堂": "Diner", "麵館": "Noodle House", "麵店": "Noodle Shop", "飯館": "Restaurant", "夜市": "Night Market",
+    "老店": "Old Shop", "總店": "Main Store", "本店": "Main Store", "分店": "Branch", "店": "Shop",
+    # Sights
+    "老街": "Old Street", "博物館": "Museum", "美術館": "Art Museum", "紀念館": "Memorial Hall",
+    "國家公園": "National Park", "公園": "Park", "步道": "Trail", "古道": "Trail", "廟": "Temple",
+    "寺": "Temple", "宮": "Temple", "教堂": "Church", "車站": "Station", "港": "Harbor", "濕地": "Wetland",
+    "瀑布": "Waterfall", "海灘": "Beach", "燈塔": "Lighthouse", "觀景台": "Viewpoint", "樓": "Tower",
+    # Streets
+    "路": "Rd.", "街": "St.", "巷": "Ln.",
+}.items(), key=lambda item: -len(item[0]))
+_HAN = re.compile(r"[\u3400-\u9fff]")
+_PUNCT = str.maketrans({"（": " (", "）": ")", "　": " ", "、": ", ", "‧": " ", "・": " ", "－": "-", "＆": "&"})
+
+
+def english_name(name: str | None) -> str | None:
+    """Latin-script name for a listing, e.g. '你來花蓮民宿' -> 'Nilai Hualien B&B'."""
+    if not name:
+        return name
+    text = re.sub(r"(\d+)\s*號", r" No. \1 ", name.strip().replace("台", "臺").translate(_PUNCT))
+    if not _HAN.search(text):
+        return text
+    words, run, latin = [], "", ""
+
+    def flush():
+        nonlocal run, latin
+        if run:
+            words.append("".join(lazy_pinyin(run, style=Style.NORMAL, v_to_u=True)).capitalize())
+        if latin:
+            words.append(latin)
+        run = latin = ""
+
+    i = 0
+    while i < len(text):
+        match = next(((zh, en) for zh, en in NAME_WORDS if text.startswith(zh, i)), None)
+        if match:
+            flush()
+            words.append(match[1])
+            i += len(match[0])
+        elif _HAN.match(text[i]):
+            if latin:
+                flush()
+            run += text[i]
+            i += 1
+        else:
+            if run:
+                flush()
+            latin += text[i]
+            i += 1
+    flush()
+    # Join translated words with spaces, keeping punctuation and Latin text attached.
+    out = ""
+    for word in words:
+        if out and not out[-1].isspace() and (word[0].isalnum() or word[0] in "(&") and out[-1] not in "(-":
+            out += " "
+        out += word
+    return re.sub(r"\s+", " ", out).replace("( ", "(").strip()
