@@ -190,3 +190,34 @@ def english_name(name: str | None) -> str | None:
             out += " "
         out += word
     return re.sub(r"\s+", " ", out).replace("( ", "(").strip()
+
+
+DIRECTIONS = {"中西": "West Central", "東": "East", "西": "West", "南": "South", "北": "North", "中": "Central"}
+DISTRICT_KINDS = {"區": "District", "鄉": "Township", "鎮": "Township", "市": "City"}
+_DISTRICT_IN_ADDRESS = re.compile(r"^[^\d]{2,3}?[縣市](.{1,3}?[區鄉鎮市])")
+
+
+def english_district(district: str | None = None, address: str | None = None) -> str | None:
+    """'北區' -> 'North District', '安平區' -> 'Anping District'; read from an address if needed."""
+    if not district and address:
+        match = _DISTRICT_IN_ADDRESS.match(address.replace("台", "臺"))
+        district = match.group(1) if match else None
+    if not district or not _HAN.search(district):
+        return district
+    stem, kind = district[:-1], DISTRICT_KINDS.get(district[-1])
+    if not kind:
+        return english_name(district)
+    return f"{DIRECTIONS.get(stem) or english_name(stem)} {kind}"
+
+
+def add_english_fields(data: dict) -> dict:
+    """Give every listed place an English name and district, so the UI never needs Chinese."""
+    for key in ("results", "stays", "matches"):
+        for item in data.get(key) or []:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            if not item.get("name_en") or _HAN.search(str(item["name_en"])):
+                item["name_en"] = english_name(item["name"])
+            district = item.get("district") or ((item.get("facts") or {}).get("district") or {}).get("value")
+            item.setdefault("district_en", english_district(district, item.get("address")))
+    return data

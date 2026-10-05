@@ -135,6 +135,10 @@ seasonal note; gaps within the near-term feed are reported as missing forecasts.
 
 ### Trip notes panel and English map
 
+Every tool has a panel card: Stays, Food, Sights, Dates, Trains, Weather and Money. Food and
+Sights list up to six returned places with English names and districts, the answer's picks first
+(marked Suggested), plus rotating night-market days. Answers from general knowledge, rejected
+messages and refused (budget-exhausted) turns make no lookup, so they add nothing to the panel.
 Board results are scoped by route/date/location, including failed and empty searches. Different
 journey legs and weather days can coexist. Proposed pins use stable IDs, English reply labels,
 and recommended/alternative roles; changed proposals replace earlier pins for that city/category.
@@ -145,7 +149,7 @@ with neither stay unlabeled rather than showing Chinese. No additional API key i
 label-free [Esri Light Gray](https://www.arcgis.com/home/item.html?id=ed712cb1db3e4bae9e85329040fb9a49) raster map appears immediately while vector assets load asynchronously, so map downloads do not block chat. A 20-second deadline covers scripts, style, and renderer readiness; failures keep the label-free map. Map/CDN requests go to their public providers.
 
 The panel shows English only: tools add `holiday_name_en` and `weather_en`, and lodging fills
-`name_en` for Chinese-only register entries with `english_name` ([tools/english_labels.py](../tools/english_labels.py)),
+`name_en` (and `run_tool` adds `name_en`/`district_en` to every listed place) with `english_name` ([tools/english_labels.py](../tools/english_labels.py)),
 which translates common words (民宿 → B&B, 牛肉湯 → Beef Soup, 花蓮 → Hualien) and romanizes the
 rest in Hanyu Pinyin. Map pins use the answer's label when it is English, otherwise the romanized
 listing name. City names and licence numbers are rendered in English and Chinese glosses are dropped.
@@ -458,7 +462,8 @@ All users share a budget of 5 tool calls per rolling minute (`TOOL_CALLS_PER_MIN
 [tools/call_budget.py](../tools/call_budget.py). Each call frees its slot 60 seconds after it ran. Over the limit,
 a tool returns an `error` with `retry_after_seconds`, and `/chat` answers HTTP 429 without calling the model.
 `GET /quota` and each `/chat` reply's `tool_quota` give `limit`, `remaining`, and `frees_in_seconds`; the header
-meter counts down from them and disables sending while no lookup is free.
+meter shows "3 of 5 available · 1 renews in 14 s" and disables sending while no lookup is free. It is a
+rolling window rather than a reset every clock minute, so no 60-second span ever exceeds five calls.
 
 ## Data sources and ranking data
 

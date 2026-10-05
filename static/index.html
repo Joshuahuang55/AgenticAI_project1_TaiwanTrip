@@ -8,7 +8,7 @@
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" />
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <link rel="stylesheet" href="/static/style.css?v=20261005-notes" />
+        <link rel="stylesheet" href="/static/style.css?v=20261005-places" />
     </head>
     <body>
         <header>
@@ -17,7 +17,7 @@
                 <p>Trip planning from Taiwan's official open data</p>
             </div>
             <div class="header-tools">
-                <div id="quota" class="quota" title="Tool lookups are shared by everyone using this app">
+                <div id="quota" class="quota" title="5 lookups per minute, shared by everyone using this app. Each lookup renews 60 seconds after it was used.">
                     <span class="quota-label">Lookups</span>
                     <span id="quota-meter" class="quota-meter" aria-hidden="true"></span>
                     <span id="quota-text" class="quota-text">Checking…</span>
@@ -63,6 +63,14 @@
                         <div class="card-title">Stays</div>
                         <div id="stay-body"></div>
                     </section>
+                    <section class="card" id="food-card" hidden>
+                        <div class="card-title">Food</div>
+                        <div id="food-body"></div>
+                    </section>
+                    <section class="card" id="sights-card" hidden>
+                        <div class="card-title">Sights</div>
+                        <div id="sights-body"></div>
+                    </section>
                     <section class="card" id="dates-card" hidden>
                         <div class="card-title">Dates</div>
                         <div id="dates-body" class="date-strip"></div>
@@ -80,7 +88,7 @@
                         <div class="card-title">Money</div>
                         <div id="budget-body"></div>
                     </section>
-                    <p class="panel-hint" id="panel-hint">Stays, trains, weather and dates from your questions are collected here.</p>
+                    <p class="panel-hint" id="panel-hint">Every lookup the agent makes (food, sights, stays, trains, weather, dates and money) is collected here.</p>
                 </div>
             </aside>
         </main>
@@ -88,6 +96,6 @@
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
-        <script src="/static/app.js?v=20261005-notes"></script>
+        <script src="/static/app.js?v=20261005-places"></script>
     </body>
 </html>
