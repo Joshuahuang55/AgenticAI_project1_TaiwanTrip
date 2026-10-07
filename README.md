@@ -86,8 +86,8 @@ Gemini runs on Vertex AI, so you need a GCP project with the Vertex AI API enabl
 
 ## More
 
-[`docs/DESIGN.md`](docs/DESIGN.md) has the full details: the agent's decision flow, a decision-flow diagram
+[`docs/DESIGN.md`](docs/DESIGN.md) has the full details: the **[agent's decision flow](docs/DESIGN.md#decision-flow)**, a decision-flow diagram
 for food and for sights, tool rules, agent design and memory, the guardrail table, data sources and
 licences, the lookup budget, deployment and access, and the project layout.
 
-The Michelin and 500 Dishes/500 Bowls data are used for research and education only, as their sources require.
+The Michelin and 500 Dishes/500 Bowls data are used for research and education only.
