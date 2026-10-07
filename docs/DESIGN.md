@@ -75,147 +75,134 @@ roll back preference and choice changes.
 
 ### Conversation policy
 
-Broad recommendation requests get a small initial selection from tool results, with areas and
-brief reasons, followed by at most one optional question to refine the next answer. The agent
-reuses details from the same conversation and respects corrections or requests to skip questions.
-It asks first when required lookup information is missing, such as the date for train schedules.
-District filtering narrows an area; it does not confirm walking distance or travel time.
+Full rules: [prompts/system.txt](../prompts/system.txt). The essentials:
 
-Completed answers end with one **Next:** line offering the most useful complementary lookup the
-user has not covered, with a ready-to-type example (food → stays nearby; trains → crowds and
-weather for that date; an itinerary → weather, trains, crowds). It is skipped when the agent is
-asking for missing details or the user asked for no questions.
+- **Answer first.** Broad requests get a few tool-backed picks with areas and reasons, then at
+  most one optional question, asked only if it would improve the next answer. Details from the
+  conversation are reused; ask before a lookup only when it needs a missing one (a date for
+  trains). Skipped questions and corrections are respected.
+- **Fit the task.** Suggestions or a comparison need not become an itinerary because a time budget
+  is known. Rough budgets may use labeled assumptions, kept apart from returned prices.
+- **Tools inform, the agent decides.** It may pick a different returned option for better overall
+  fit. A district match is not a walking distance.
+- **Useful over exhaustive.** Choices come first; status labels stay internal; gaps go into one
+  short note. Missing fields never cause a refusal; strict filtering needs an explicit request for
+  confirmed matches. This holds for every recommendation tool.
+- **Close with Next:** one complementary lookup not yet covered, with a ready-to-type example
+  (food → stays nearby; trains → crowds and weather that date; itinerary → weather, trains,
+  crowds). Skipped when asking for details or when the user wants no questions.
+- **Beyond the tools**, route advice may give estimated costs/durations, but exact last
+  departures, current fares and all-night service need retrieved information. Source lines name
+  only tool results, including reused ones; general knowledge is never shown as a lookup.
 
-The answer format follows the task: a comparison or a few suggestions need not become an
-itinerary just because a time budget is known. Tool rankings and estimated outings support
-the agent's decision; it may choose a different returned option for better overall trip fit.
-Optional questions should resolve a useful gap, rather than appear as a standard ending.
-Rough budgets can use labeled assumptions, while returned prices remain distinct from estimates.
+### Structured replies
 
-For transport beyond the rail tool's coverage, the agent may give general route advice with
-estimated costs/durations. Exact last departures, current fares, and all-night service need
-relevant retrieved information. Source lines name sources from relevant tool results, including
-reused session results; general knowledge is not presented as an official lookup.
+The main agent returns SDK `output_type=TravelReply` (`agent_reply.py`): Markdown `message`,
+proposed `places`, and lookup `sources`, as reference IDs carried by accepted planning records
+and their candidates.
 
-This is everyday travel planning: useful suggestions and reasonable estimates take priority
-over exhaustive verification. Traveler-facing answers start with choices and concrete
-comparisons. Evidence/status labels stay internal; relevant data gaps are combined into one
-short practical note after suggestions. Missing fields alone do not trigger a refusal. Strict
-evidence filtering requires an explicit request for confirmed matches. This policy applies to
-every recommendation tool.
+- The server resolves IDs within the session, ignores unknown references and places whose
+  displayed labels are absent from the answer, and renders the source footer from the
+  referenced results. General advice uses no sources.
+- Internal IDs are removed from the displayed prose and labels; names, ordinary links and map
+  references stay. Session history keeps the cleaned text.
+- Attraction/food map pins use the referenced original listing names, so English-only answers and
+  follow-ups that reuse earlier results get pins without another lookup.
+- The frontend receives readable `response`, actual `tool_calls`, and `map_pins`; the JSON reply
+  stays internal. Guardrails inspect the message; helper agents read its text. No additional
+  model call is added.
+- References identify returned records; they do not independently verify every sentence.
 
-### Structured final replies
+### Memory
 
-The main agent uses SDK `output_type=TravelReply` from `agent_reply.py`: Markdown
-`message`, proposed `places`, and lookup `sources`. Accepted planning records and their
-candidates carry stable reference IDs. The server resolves IDs within the current session,
-ignores unknown references and places whose displayed labels are absent from the answer,
-and renders source footers from referenced result metadata. General advice uses no sources.
-Internal IDs are removed from displayed prose and labels, preserving human-readable names,
-ordinary links, and map references. Session history and proposals keep the cleaned text.
-References identify returned records; they do not independently verify every sentence.
+Within one conversation (one `session_id`) the agent keeps three kinds of memory. **New trip**,
+session eviction, six hours of inactivity or a server restart removes all three; none is a
+permanent user profile.
 
-Proposals save explicit recommended/alternative places and their districts alongside a
-bounded text excerpt. These suggestions remain separate from user-confirmed choices.
-Attraction/food map pins use referenced original listing names, so English-only answers
-and follow-ups reusing earlier results can show pins without another lookup.
-The frontend receives readable `response`, actual `tool_calls`, and `map_pins`;
-JSON replies stay internal. Guardrails inspect the message, helper agents read its text,
-and history keeps cleaned structured replies. Rejected/failed turns clear reply metadata
-and roll back choices and proposals. Provider failures retain accepted completed lookups;
-guardrail rejections restore the previous planning state. No additional model call is added.
+| Memory | Holds | Limit | Code |
+|---|---|---|---|
+| Chat history | Messages and cleaned structured replies | Last 20 user turns | `app.py` |
+| Trip context | What the **user said**: city, area, travel dates, departure point, budget, interests, dietary needs, outing duration/setting and clock window, question preference | Survives history trimming | `trip_context.py`, `prompts/trip_context.txt` |
+| Planning context | What the **agent looked up and proposed**: candidate locations, reference prices, weather strategy, train times, suggested outing durations/timelines, proposals | 10 lookup records; archive of 80 for selected/proposed evidence; 9,000-character summary | `planning_context.py`, `agent_hooks.py` |
 
-### Trip context within a session
+History is cut to 20 turns, but a stated need such as "vegetarian" must outlast it. And tool-ranked
+picks, bounded assistant proposal excerpts and user-confirmed choices stay distinct; planning
+facts never become user preferences.
 
-Each session saves the user's city, area, travel dates, departure point, budget, interests,
-dietary needs, outing duration/setting and clock window, and question preference separately
-from the last 20 user turns. `trip_context.py` extracts changes using a typed SDK output and
-`prompts/trip_context.txt`; each saved value includes an exact supporting quote from the
-current user message. Missing details, explicit "no preference", and withdrawn details are
-distinct. Latest corrections replace old values; changing city/date clears the old outing
-window; changing city also clears the area. Clock corrections reconcile the duration, and
-duration corrections derive a matching boundary. Derived values are marked; saved windows are
-restored only for the matching city/date. Unrelated preferences remain.
-Budget values retain the stated currency and scope; extraction does not convert prices.
+**Trip context**
 
-The blocking input guardrail screens the message before extraction, then the main agent's
-dynamic instructions include the updated context. This adds one model call per accepted
-message, with a 10-second extraction timeout. Invalid output or extraction failure retains
-the previous context and lets the conversation continue. Provider HTTP 429 stops the turn
-early with a busy/rate-limit message; it does not continue into more model calls.
-Failed/rejected main runs roll back preference changes. Evidence checks validate provenance
-and format; semantic extraction still depends on the model. Requests within one session run in
-order to avoid overlapping updates.
+- Extracted after the input guardrail passes: one extra model call per accepted message
+  (10-second timeout) with a typed SDK output. Dynamic instructions then include it.
+- Each saved value carries an exact supporting quote from the current message. Evidence checks
+  validate provenance and format; semantic extraction still depends on the model.
+- Missing, explicit "no preference" and withdrawn details are distinct.
+- Latest corrections replace old values. Changing city/date clears the old outing window;
+  changing city also clears the area. Clock corrections reconcile the duration, and duration
+  corrections derive a matching boundary. Derived values are marked; saved windows are restored
+  only for the matching city/date. Unrelated preferences remain.
+- Budgets keep the stated currency and scope; extraction does not convert prices.
+- Explicitly named selections are saved with user evidence; vague agreement selects nothing.
+- Invalid output or an extraction failure keeps the previous context; the conversation continues.
 
-Context is isolated by `session_id`, survives history trimming, and is removed by **New trip**,
-session eviction, six hours of inactivity, or server restart. It is not a permanent user profile.
-The browser restores its bounded transcript and board after refresh while the server session is
-active, and explicitly reports an expired session. Sends are serialized; New trip cancels the
-active server turn before removing its state. Busy states are never evicted. Classifier/extractor
-calls have ten-second deadlines, the whole turn has a 180-second deadline, and the frontend
-request stops after 190 seconds.
+**Planning context**
 
-### Planning context and SDK hooks
+- `agent_hooks.py` collects accepted tool results after output checks. Lookup keys include all
+  executed criteria; candidate identities do not depend on lookup order.
+- Proposals record each reply's recommended/alternative places and districts with a bounded text
+  excerpt. Selected/proposed evidence survives ordinary lookup eviction in the archive.
+- Before each main-agent call, dynamic instructions expose the relevant city's records, also on
+  follow-ups after history trimming. The active city comes first; other destinations stay when
+  space permits, so a side trip does not hide the accommodation base.
+- Bounded conversation memory, not a stored itinerary; no extra model calls. Helper agents get
+  the beginning and end of long replies, preserving the latest follow-up question.
 
-`agent_hooks.py` collects accepted tool results after output checks. `planning_context.py`
-keeps up to 10 compact lookup records: candidate locations, reference prices, weather strategy,
-train times, and suggested outing durations/timelines. Dynamic instructions expose relevant
-city records before the next main-agent call, including follow-ups after history trimming.
-The injected planning summary is capped at 9,000 characters. The active city's records are
-prioritized, with other destinations retained when space permits so a side trip does not
-hide the trip's accommodation base. This remains bounded conversation memory, not a complete
-stored itinerary. Helper agents receive the beginning and end of long replies, preserving
-the latest follow-up question.
+**When a turn does not finish**
 
-Tool-ranked picks, bounded assistant proposal excerpts, and user-confirmed choices are distinct.
-The extractor can save explicitly named selections with user evidence; vague agreement
-does not select an alternative. Extraction still depends on the model's interpretation.
-Planning facts do not become user preferences. Rejected turns roll back planning updates;
-provider failures, timeouts, and tool-round exhaustion retain accepted completed lookups, while
-rolling back preferences, named choices, and unfinished proposals. Partial responses expose
-those real lookups even without a final model answer. There are no extra model calls.
-Lookup keys include all executed criteria; candidate identities are independent of lookup order.
-Selected/proposed evidence survives ordinary lookup eviction in a bounded archive (80 compact
-records), while the injected summary remains capped at 9,000 characters.
+| Outcome | Trip context | Completed lookups | Proposals, named choices, reply |
+|---|---|---|---|
+| Completed | Updated | Updated | Updated |
+| Rejected by the input or output guardrail | Rolled back | Rolled back | Rolled back |
+| Model/provider error, HTTP 429, timeout, or tool-round limit | Rolled back | **Kept** | Rolled back |
 
-Each turn also saves a bounded diagnostic entry (last 20 turns) and writes
-`Agent planning diagnostics` to the server log: main-agent model-call count, tool counts,
-recommended-place counts by kind, failed lookups, elapsed time, and flags for missing
-sightseeing/food results in broad plans, identical repeated lookups, or food searches without
-an available planning area. Recommendation counts have no fixed daily threshold; slower visits
-and travel days can need fewer stops. Logs omit chat text, arguments, and result contents.
-Flags are review signals, not proof an answer is bad; hooks do not force tool choices or
-rewrite answers. `/chat` keeps its response format.
+A rejected message is also kept out of history. HTTP 429 from the provider stops the turn early
+with a busy message instead of more model calls. Kept lookups are shown even without a final
+answer.
 
-### SDK tool definitions
+**Sessions.** Requests within a session run in order, so updates never overlap; New trip cancels
+the active turn before removing its state, and busy sessions are never evicted. After a refresh
+the browser restores its bounded transcript and board while the session is active, and says
+when it has expired. Deadlines: classifier/extractor 10 seconds, turn 180, frontend request 190.
 
-The main agent uses `gemini-3.5-flash-lite` on Vertex AI with medium thinking, configured
-through `ModelSettings.reasoning` in `app.py`. The input classifier and preference
-extractor explicitly use minimal thinking to keep their preprocessing calls fast.
+### Diagnostics
 
-All seven agent tools are typed `@function_tool` wrappers in `tools/agent_tools.py`.
-The SDK generates descriptions and JSON schemas from their type hints and Google-style
-docstrings. `Literal` defines choices; `Annotated`/Pydantic `Field` defines numeric bounds.
-The plain Python functions and `run_tool` registry remain usable by tests and scripts;
-there are no handwritten `SCHEMA` dictionaries.
+Each turn saves a diagnostic entry (last 20 turns) and logs `Agent planning diagnostics`:
+main-agent model calls, tool counts, recommended places by kind, failed lookups, elapsed time,
+and flags for broad plans missing sightseeing/food results, identical repeated lookups, and food
+searches without a planning area. Logs omit chat text, arguments and results. Flags are review
+signals, not proof of a bad answer, and there is no fixed daily stop count (slow visits and
+travel days need fewer). Hooks never force tool choices or rewrite answers.
 
-The shared adapter executes synchronous work in a worker thread, restores saved outing
-arguments, applies explicit lodging counts, and records the actual arguments/results for
-the chat display. Input/output tool guardrails still run. SDK argument errors
-produce recorded `error`/`hint` replies so the agent can correct a call and continue.
-Optional arguments retain defaults with `strict_mode=False` for Gemini; supplied values
-are validated before execution, and unknown arguments are rejected. Conversation policy
-and the choice to combine weather/attraction tools remain in the system prompt.
+### SDK tools
 
-Tool descriptions explain when to combine searches. The SDK adapter adds conditional
-`next_steps` suggestions for broad trip plans and dated single-day outings lacking matching
-weather. These hints do not execute tools or save preferences; the model chooses actual calls,
-which remain visible separately. Same-turn attempts suppress repeated suggestions, and matching
-weather from earlier turns can be reused. The lightweight trip-plan detector is heuristic.
-
-To add a tool, register its domain function in `tools/__init__.py`, add a decorated typed
-wrapper to `build_tools`, describe arguments in its docstring, and extend the mocked tests.
-Check a fresh app session after description changes ([manual checks](#manual-checks)).
+- The main agent uses `gemini-3.5-flash-lite` on Vertex AI with medium thinking
+  (`ModelSettings.reasoning` in `app.py`); the input classifier and preference extractor use
+  minimal thinking to stay fast.
+- All seven tools are typed `@function_tool` wrappers in `tools/agent_tools.py`. The SDK builds
+  descriptions and JSON schemas from type hints and Google-style docstrings: `Literal` for
+  choices, `Annotated`/Pydantic `Field` for numeric bounds. There are no handwritten `SCHEMA`
+  dictionaries; the plain functions and `run_tool` registry stay usable by tests and scripts.
+- The shared adapter runs synchronous work in a worker thread, restores saved outing arguments,
+  applies explicit lodging counts, and records actual arguments/results for the chat display.
+  Input/output tool guardrails still run. SDK argument errors return recorded `error`/`hint`
+  replies so the agent can correct the call. With `strict_mode=False` for Gemini, optional
+  arguments keep defaults; supplied values are validated and unknown arguments rejected.
+- The adapter adds conditional `next_steps` hints for broad trip plans and dated single-day
+  outings lacking matching weather. They never execute tools or save preferences; same-turn
+  attempts suppress repeats, and matching earlier weather can be reused. The trip-plan detector
+  is heuristic. Conversation policy and the weather/attraction combination stay in the prompt.
+- To add a tool: register its function in `tools/__init__.py`, add a typed wrapper to
+  `build_tools` with a docstring for its arguments, extend the mocked tests, and check a fresh
+  app session ([manual checks](#manual-checks)).
 
 ## Tools
 
@@ -229,243 +216,201 @@ Check a fresh app session after description changes ([manual checks](#manual-che
 | `crowd_risk_check` ⭐ | Official days off and travel-pressure estimates for trips up to 30 days | [Government office calendar](https://data.gov.tw/dataset/14718) and [historical TRA station entries](https://data.gov.tw/dataset/8792) |
 | `twd_exchange` | Converts to/from TWD and compares weekly samples over four weeks | [fawazahmed0/exchange-api](https://github.com/fawazahmed0/exchange-api) daily rates |
 
-⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do next.
+⭐ = original tool. Every tool returns `{"error", "hint"}` on failure so the model knows what to do
+next. Missing facts are **unknown**, explicit contrary reports **conflicts**, failed lookups
+**unavailable**; source claims are **reported**, not independently verified. Food, attractions,
+lodging, rail and weather return explicit comparison fields.
 
-**Shared result rules.** Treat missing facts as **unknown**, explicit contrary reports as
-**conflicts**, and failed lookups as **unavailable**. Source claims are **reported**, not
-independently verified. Compare only available facts, explain the best supported fit and
-alternatives, and name relevant uncertainty. Food, attractions, lodging, rail and weather
-return explicit comparison fields; the other tools return their domain outputs.
+### Lodging (`legal_stay_check`)
+
+- **Check mode:** a unique normalized same-city name gives `match_status: matched`,
+  `is_registered: true`; similar or out-of-city records come back as `candidates` (null), with
+  addresses to tell them apart. Name matching falls back nationwide. No match does not prove a
+  stay illegal.
+- **List mode:** `district` (Traditional Chinese), `type` (`hotel`/`bnb`), `price_preference`
+  (`budget`/`any`), and `max_price_twd` for a stated nightly budget. "Cheap" means `budget`,
+  which ranks by lower reported starting rates without inventing a cap. One cached TDX query
+  fetches up to 500 candidates; Python filters, deduplicates and ranks them and returns up to
+  `limit` (1–10, default 5). A pool reaching 500 may be incomplete.
+- **Count:** an explicit recommendation count is applied by the SDK wrapper even if the model
+  omits `limit`; guests, nights, star ratings and prices are not counts.
+- **Ranking:** a numeric budget excludes known higher starting rates; absent/zero/invalid rates
+  stay unknown and eligible. For budget requests known lower rates come before missing ones,
+  and certification breaks price ties. Without a price preference, Taiwan Host certification
+  leads.
+- **Results:** `stays` (map fields plus `district`, `price_range_twd`, `preference_match`) and
+  `comparison` (recommended name, reasons, reference-price differences, candidate counts).
+
+| Can compare | Limits |
+|---|---|
+| Registration, licensed type, district, certification, structured reference rates, ranked pick and trade-offs | Registration is not a quality rating. Prices are owner-reported reference ranges, not booking quotes: a starting rate within a cap does not mean every room or date qualifies, and missing rates still allow suggestions. A district match does not mean near a landmark or MRT. No live rooms |
 
 ### Food (`find_local_food`)
 
 ```mermaid
-flowchart TD
-    I["Inputs: city, keyword, district, style,<br/>dietary, price_preference, max_price_twd,<br/>confirmed_only, names"] --> K{Kind of search}
-    K -->|names| D["Look up named places loosely<br/>(阿宗麵線 finds 阿宗麵線西門店);<br/>unmatched names go to not_found"]
-    K -->|night market| NM[Registered night markets,<br/>plus rotating-market days]
-    K -->|search| S["Gather: official restaurants (daily file)<br/>+ OSM places + Michelin extras;<br/>an OSM place within 150 m of an official<br/>one with a matching name is merged"]
-    S --> F["Filter: city/district, keyword<br/>(Chinese name, English name, cuisine tag);<br/>drop closed places; keep one branch per name"]
-    F --> PR["Preferences: compare dietary, price and<br/>district facts; known conflicts go to excluded,<br/>with confirmed_only so do unconfirmed ones"]
-    PR --> R["Rank: preference evidence first,<br/>then keyword in name, then fame<br/>(local score for style=local)"]
-    R --> SEL["Select 10: unconstrained searches cap fine<br/>dining at a third and end with up to<br/>two local gems; more_candidates: next 30<br/>award winners or well-known places"]
-    SEL --> LLM["Agent picks from results; names from<br/>more_candidates or memory need a names<br/>lookup first; awards and prices only from<br/>returned fields"]
-    D --> LLM
-    NM --> LLM
+flowchart LR
+    G["Gather<br/>official + OSM<br/>+ Michelin extras"] --> F["Filter<br/>city, district, keyword<br/>drop closed<br/>one branch per name"]
+    F --> P["Preferences<br/>diet, price, district<br/>conflicts excluded"]
+    P --> R["Rank<br/>preference evidence<br/>› keyword › fame"]
+    R --> S["Select 10<br/>fine dining ≤ ⅓<br/>2 local gems<br/>+ 30 candidates"]
+    S --> A["Agent picks<br/>returned places only"]
 ```
 
-**Scores** (from [scripts/build_food_fame.py](../scripts/build_food_fame.py)):
+- **Gather:** official restaurants (daily file), OSM places and Michelin extras. An OSM place
+  within 150 m of an official one with a matching name is merged into it. `names` skips the
+  search and looks names up loosely (阿宗麵線 finds 阿宗麵線西門店), listing misses in
+  `not_found`; keyword `night market` returns registered markets plus rotating-market days.
+- **Filter:** keyword matches the Chinese name, English name or OSM cuisine tag.
+- **Scores** ([scripts/build_food_fame.py](../scripts/build_food_fame.py)):
+  - Fame is the strongest signal: Michelin 3 stars 1.0, 2 stars 0.95, 1 star 0.9, Bib Gourmand
+    0.75, Selected 0.6; 500盤/500碗 by plates or bowls on a log scale; 0.7 for a reviewed
+    well-known place without awards; 0.2 for an OSM English name alone.
+  - Local is max(500盤, 500碗) × (1 − Michelin score); chains (a name on 5+ OSM places) get 0.3
+    of it. Awards last listed in 2024 count 0.7, earlier ones 0.5. `style: local` ranks by it.
+  - Fine dining is a Michelin star, $$$ or higher, or a 500盤 place that neither 500碗 nor a
+    Michelin $–$$ price marks as everyday food. Unless asked for (Michelin, omakase, tasting
+    menu…), it fills at most a third of the results.
+  - A manual closed list (e.g. RAW) removes places the data still lists.
+- **Preferences:** `dietary` (`vegetarian`/`vegan`), `price_preference`
+  (`budget`/`mid_range`/`any`), `max_price_twd` (per person per meal, TWD) and `confirmed_only`;
+  keep them on `names` lookups. `budget` selects `$`, `mid_range` allows `$`/`$$`; unknown bands
+  stay unconfirmed, and no band verifies an exact cap (lower known bands just rank first).
+  `confirmed_only` (only on request) needs reported support for every criterion, not live
+  verification.
+- **Comparison:** each result's `facts` hold `value`, `status` and `source` (plus dietary
+  evidence); `comparison` marks fit as `reported_match`, `needs_confirmation`, `conflict` or
+  `not_requested`. Conflicts go to `excluded`; with `confirmed_only`, unconfirmed candidates are
+  excluded too, without names, and exact meal caps cannot be confirmed yet.
+  `comparison_summary` counts matches, leads and both kinds of exclusions.
+- **Ranking:** dietary reports, then dietary name/cuisine indications, then no dietary evidence;
+  then other criteria, dietary variety, relative prices, keyword and awards. Searches
+  constrained by district, diet or price add no local gems and no fine-dining cap. Searches are
+  not exhaustive; ordinary suggestions can offer dietary leads with a brief caveat, and "cheap"
+  needs no exact price confirmation.
+- **Dietary data:** OSM keeps [vegetarian](https://wiki.openstreetmap.org/wiki/Key:diet:vegetarian)
+  and [vegan](https://wiki.openstreetmap.org/wiki/Key:diet:vegan) distinct; names/cuisine are
+  only indications and contradictory tags stay uncertain. The bundled file (built 2026-10-02)
+  predates dietary tags in the builder, so its records count as unknown until the next rebuild.
+  Merged listings keep the source of borrowed hours/dietary information.
+- **Results:** name, English name, awards, `known_for`, relative `price` band, address, hours,
+  `facts`, `missing_fields` and a Google Maps link from the coordinates. Results carry no
+  coordinates; pins come from the final reply.
 
-- **Fame** is the strongest signal: Michelin 3 stars 1.0, 2 stars 0.95, 1 star 0.9, Bib
-  Gourmand 0.75, Selected 0.6; 500盤 or 500碗 by plates or bowls on a log scale; 0.7 for a
-  reviewed well-known place without awards; 0.2 for an English name in OSM and no award.
-- **Local** is max(500盤, 500碗) × (1 − Michelin score); chains (a name on 5+ OSM places) get
-  0.3 of it. Awards last listed in 2024 count 0.7, earlier ones 0.5.
-- **Fine dining** means a Michelin star, a $$$ price or higher, or a 500盤 place that neither
-  500碗 nor a Michelin $–$$ price marks as everyday food. Unless the user asks for fine dining
-  (Michelin, omakase, tasting menu…), it fills at most a third of the results.
-- A manual closed list (for example RAW) removes places the data still lists.
-
-**Preferences.** Optional arguments `dietary` (`vegetarian`/`vegan`), `price_preference`
-(`budget`/`mid_range`/`any`), `max_price_twd`, and `confirmed_only` accompany city/district/dish
-filters. Keep them on `names` lookups. Set `confirmed_only: true` when the user requests only
-confirmed matches; this requires reported support for every requested criterion, not live
-independent verification. `budget` selects the relative `$` category and `mid_range` allows
-`$`/`$$`; unknown bands remain unconfirmed. A numeric cap is explicitly per person per meal in
-TWD. No returned band verifies that exact cap; lower known bands simply rank first among
-otherwise equal unconfirmed leads.
-
-Each restaurant's `facts` contains `value`, `status`, and `source`, plus dietary evidence when
-available. `comparison` checks each requested criterion and marks the overall fit as
-`reported_match`, `needs_confirmation`, `conflict`, or `not_requested`. Conflicting options
-appear in `excluded`, not `results`. With `confirmed_only`, uncertain candidates are also
-excluded without their names; exact meal caps currently cannot be confirmed.
-`comparison_summary` counts returned matches/leads, excluded conflicts, and excluded
-unconfirmed candidates. Ranking favors dietary reports, then dietary name/cuisine indications,
-ahead of candidates with no dietary evidence. It next compares other criteria, dietary variety,
-relative prices, and keyword/awards. Ordinary recommendations offer promising dietary leads
-with brief caveats when reports or prices are unavailable; "cheap" does not require exact
-meal-price confirmation. Constrained searches (district, diet or price) do not inject
-lower-fit local gems or cap fine dining. Searches are not exhaustive.
-
-OSM dietary tags retain their [vegetarian](https://wiki.openstreetmap.org/wiki/Key:diet:vegetarian)
-and [vegan](https://wiki.openstreetmap.org/wiki/Key:diet:vegan) distinctions. Names/cuisine
-terms are only indications; contradictory tags remain uncertain. The OSM builder keeps dietary
-tags and reported districts, but the bundled file (built 2026-10-02) predates that, so its
-records have no dietary tags and count as unknown until the next rebuild. Merged listings
-preserve the source of borrowed hours/dietary information.
-
-**Results.** Each result carries name, English name, awards, `known_for`, relative `price`
-band, address, opening hours, `facts`, `missing_fields` and a Google Maps link built from its
-coordinates (useful when OSM has no street address). Search results carry no coordinates;
-pins come from the final reply ([Frontend](#frontend)).
-
-| Can compare | Missing information / limits |
+| Can compare | Limits |
 |---|---|
 | Dietary reports, cuisine, district, relative price band, awards, listed hours | No exact current menu prices or ingredient guarantees; some districts are estimated; 57% of OSM places have no street address |
 
 ### Attractions (`find_attractions`)
 
 ```mermaid
-flowchart TD
-    I["Inputs: city, keyword, district, style,<br/>interests, setting, available_minutes, names"] --> K{Kind of search}
-    K -->|names| D["Look up named places loosely<br/>(士林夜市 finds 士林觀光夜市);<br/>reports closed and unmatched names"]
-    K -->|search| S["Gather: official listings (daily file)<br/>+ Wikidata extras"]
-    S --> F["Filter: city/district, keyword in name or<br/>description ('nature' matches by category);<br/>drop closed listings; merge listings whose<br/>names contain each other"]
-    F --> R["Rank: keyword in name, then fame<br/>(style=local: reviewed favorites, then local fame);<br/>then preferences re-rank: interests,<br/>setting and time fit before fame"]
-    R --> SEL["Select 10: one per trail series first;<br/>without preferences, up to two local gems<br/>(temples capped at a third for style=local);<br/>more_candidates: every other match by district"]
-    SEL --> PL["Planning: visit-duration estimates,<br/>nearby groups, comparison,<br/>time-budgeted suggested_visit"]
-    PL --> LLM["Agent picks from results; names from<br/>more_candidates need a names lookup first;<br/>hours and fees only from open_time/ticket_info"]
-    D --> LLM
+flowchart LR
+    G["Gather<br/>official<br/>+ Wikidata extras"] --> F["Filter<br/>city, district, keyword<br/>drop closed<br/>merge same place"]
+    F --> R["Rank<br/>keyword › fame<br/>preferences re-rank"]
+    R --> S["Select 10<br/>one per trail series<br/>2 local gems<br/>+ all other matches"]
+    S --> PL["Plan<br/>visit times, nearby groups<br/>suggested outing"]
+    PL --> A["Agent picks<br/>returned places only"]
 ```
 
-**Scores** (from [scripts/build_fame.py](../scripts/build_fame.py)): fame is the mean of each
-listing's county percentiles for Chinese Wikipedia views, article length and language editions,
-halved for campuses, stations, airports and science parks; a trail matched to its mountain
-scores by the mountain's English Wikipedia views. Local fame is fame × (1 − English fame). 226
-local favorites were labeled by Qwen and reviewed by a second model. Local gems are reviewed
-favorites or local fame of 0.8 or more.
+- **Gather:** official listings (daily file) and Wikidata extras. `names` skips the search and
+  looks names up loosely (士林夜市 finds 士林觀光夜市), reporting closed and unmatched names.
+- **Filter:** keyword in name or description (`nature` matches by category instead); listings
+  whose names contain each other are merged.
+- **Scores** ([scripts/build_fame.py](../scripts/build_fame.py)): fame is the mean of each
+  listing's county percentiles for Chinese Wikipedia views, article length and language
+  editions, halved for campuses, stations, airports and science parks; a trail matched to its
+  mountain scores by the mountain's English Wikipedia views. Local fame is fame × (1 − English
+  fame); 226 local favorites were labeled by Qwen and reviewed by a second model.
+- **Select:** without preferences, the last two slots go to local gems (reviewed favorites or
+  local fame of 0.8+); `style: local` ranks by favorites, then local fame, with temples capped
+  at a third. `more_candidates` lists every other match by district.
+- **Preferences:** `interests` (history, art, nature, hiking, shopping, culture, museums,
+  temples), `setting` (`indoor`, `outdoor`, `any`) and `available_minutes` (15–720, the whole
+  outing excluding travel to/from the area); keep them on `names` lookups. They rank before
+  fame/local scores without excluding unknown or partial matches. Time and setting persist in the
+  session (the wrapper restores them on follow-ups); a destination change clears the time budget.
+- **Planning:** each result has `planning` and `preference_match`; `comparison` gives the
+  recommended name, reasons, alternatives and nearby groups (every pair within 2 km in a straight
+  line). A time-budgeted `suggested_visit` is an ordered `timeline`: visits limited by time and
+  suitable candidates, estimated city transfers (20–60 minutes, 45 when coordinates are unknown,
+  possibly beyond the nearby radius), and a 30-minute break for outings of four hours or more
+  with several stops. Visits use typical category durations rather than stretching to fill the
+  budget; planned and remaining minutes are reported. For an itinerary the agent fills remaining
+  time with suitable options, another search, or explicit free time; the candidate limit is not a
+  quota of stops.
 
-**Preferences.** Pass `interests` (history, art, nature, hiking, shopping, culture, museums,
-temples), `setting` (`indoor`, `outdoor`, or `any`), and `available_minutes` (15–720) when the
-user supplies them. The time budget is for the entire outing, excluding travel to/from the
-area. Keep these criteria on `names` detail lookups. Preferences rank before fame/local scores;
-they do not exclude every unknown or partial match. Broad searches retain fame, variety, and
-local-gem behavior.
-
-Each result includes `planning` and `preference_match`; `comparison` provides the recommended
-name, reasons, alternatives, and nearby groups. Visit-duration ranges and indoor/outdoor labels
-are category/name estimates, separate from reported hours and admission prices. Nearby groups
-require every pair to be within 2 km in a straight line. A time-budgeted `suggested_visit` gives
-an ordered `timeline` with visits limited by time and suitable candidates, estimated city
-transfers (20–60 minutes), and a 30-minute break for outings of at least four hours with
-multiple stops. Transfers may connect places beyond the nearby-group radius; unknown
-coordinates use a 45-minute allowance without claiming proximity. Visits use typical category
-durations rather than automatically expanding to consume the budget. The tool reports planned
-and remaining minutes. For a requested itinerary, the agent accounts for remaining time with
-suitable options, another search, or explicit free time and breaks; the candidate limit is not
-a quota for scheduled stops. Time and setting preferences persist within the session; the
-attraction wrapper restores them when omitted on follow-ups. A destination change clears the
-old outing's time budget. It is a planning suggestion, not a checked walking route or
-date-specific opening-hours itinerary. Missing hours/prices still allow useful recommendations.
-
-| Can compare | Missing information / limits |
+| Can compare | Limits |
 |---|---|
-| Categories, listed details, interest/setting fit, estimated visit duration, ranked comparison and nearby outing | Planning heuristics are estimates; coordinate distances are not walking routes; hours/fees can be missing |
-
-### Lodging (`legal_stay_check`)
-
-Check mode distinguishes a unique normalized same-city name (`match_status: matched`,
-`is_registered: true`) from similar or out-of-city records (`candidates`, null). Candidate
-addresses are displayed for disambiguation; an unsuccessful search does not prove illegality.
-Check mode keeps its name matching and nationwide fallback behavior.
-
-List mode supports `district` (Traditional Chinese), `type` (`hotel`/`bnb`),
-`price_preference` (`budget`/`any`), and `max_price_twd` for a stated numeric nightly budget.
-"Cheap" uses `budget`, which ranks by lower reported starting rates without inventing a cap.
-The tool makes one cached TDX query for up to 500 candidates, then filters, deduplicates,
-and ranks in Python before returning up to `limit` stays (1–10, default 5).
-An explicit recommendation count is applied by the SDK wrapper when recognized, even if the
-model omits `limit`; guests, nights, star ratings, and prices are not result counts. Numeric
-budgets exclude known higher starting rates; absent/zero/invalid rates remain unknown and
-eligible. Known lower starting rates rank before missing rates for budget requests;
-certification breaks price ties. Without a price preference, Taiwan Host certification leads
-the ordering.
-
-`stays` holds the UI/map fields plus `district`, `price_range_twd`, and `preference_match`.
-`comparison` provides the recommended name, reasons, reference-price differences, and
-candidate counts. A pool reaching 500 may be incomplete; recommendations are among returned
-candidates. District matches do not establish proximity to a landmark or MRT. Prices are
-owner-reported reference ranges, not booking quotes; a starting rate within a cap does not mean
-every room or date qualifies. Missing rates do not prevent useful suggestions.
-
-| Can compare | Missing information / limits |
-|---|---|
-| Registration, licensed type, district, certification, structured reference rates, ranked pick and trade-offs | Registration is not a quality rating; reference starts do not verify every room or travel date; no live rooms/booking prices |
+| Categories, listed details, interest/setting fit, estimated visit duration, ranked comparison and nearby outing | Durations and indoor/outdoor labels are category/name estimates; distances are not walking routes; the outing is not checked against opening hours. Hours/fees can be missing but still allow recommendations |
 
 ### Rail (`hsr_trip_planner`)
 
-`hsr_trip_planner` ranks the whole matching timetable before selecting `limit` options (1–10,
-default 3). `preference` accepts `earliest_arrival` (default), `fastest`, `cheapest`, or
-`earliest_departure`. Default ranking favors arriving soonest, with ties favoring shorter
-journeys; earliest departure applies only when requested. Cheapest compares adult
-standard-class fares, with ties favoring shorter journeys; unknown fares are never treated as
-free. Each query compares one rail service.
+- Ranks the whole matching timetable, then returns `limit` options (1–10, default 3); each query
+  covers one rail service, using the same station, timetable and fare requests (none per train).
+- `preference`: `earliest_arrival` (default; ties favor shorter journeys), `fastest`, `cheapest`
+  (adult standard-class fares, ties favor shorter journeys; unknown fares are never free), or
+  `earliest_departure` (only when requested).
+- `depart_after`/`depart_before` form an inclusive `HH:MM` departure window; `arrive_by` is an
+  inclusive deadline on the **same travel date**. Overnight journeys include `arrival_date`, and
+  arrival ranking accounts for the day change.
+- Results: `trains` (types, times, durations, fares) and `comparison` (recommended train, reason,
+  matching/returned counts, equal-fare flag, time/fare differences). Missing fares leave schedules
+  usable; `cheapest` with no fares recommends the earliest arrival. Station/timetable failures
+  return errors.
 
-`depart_after` and `depart_before` define an inclusive departure window in `HH:MM`.
-`arrive_by` is an inclusive arrival deadline on the **same travel date**, not the following day.
-Overnight journeys include `arrival_date`, and arrival ranking accounts for the day change.
-
-The `trains` list holds train types, times, durations, and fares. `comparison` adds the
-recommended train, reason, matching/returned counts, equal-fare flag, and computed time/fare
-differences for alternatives. Missing fares leave schedules usable; for `cheapest` with no
-fares, the tool recommends the earliest arrival instead. Station/timetable failures return
-errors. Ranking uses the same station, timetable, and fare requests, without per-train requests.
-
-| Can compare | Missing information / limits |
+| Can compare | Limits |
 |---|---|
 | Train type/number, departure, arrival/date, duration, fare, time windows, ranked recommendation and trade-offs | Up to ten options per query within one rail service; no live seats/delays; fares can be missing |
 
 ### Weather (`typhoon_backup_plan`)
 
-`typhoon_backup_plan` accepts `available_minutes` (15–720) and same-day
-`start_time`/`end_time` in Taiwan `HH:MM`. The default window is 08:00–20:00;
-an explicit start plus duration supplies the end when omitted. Session context retains the
-outing duration and clock window on follow-ups. Train windows are not sightseeing windows.
+- **Window:** `available_minutes` (15–720) and same-day `start_time`/`end_time` in Taiwan
+  `HH:MM`; default 08:00–20:00, and a start plus duration supplies the end. The session keeps the
+  duration and window on follow-ups; train windows are not sightseeing windows.
+- **Assessment:** `forecast` keeps the daily summary; `comparison` uses only intervals overlapping
+  the outing (including overnight periods from the previous day), aligned by timestamp. Rain
+  below 40% favors outdoors, 40–69% flexible, 70%+ indoors: app heuristics, not CWA warning
+  levels or rainfall intensity. Periods can split the plan; missing values and incomplete
+  coverage never become an all-clear. Per the [CWA product specification](https://opendata.cwa.gov.tw/opendatadoc/Forecast/F-D0047-001_093.pdf)
+  weekly intervals are 12 hours with rain probabilities only for the first three days; the tool
+  invents no hourly probabilities.
+- **No places:** the tool makes no attraction or TDX lookup. When useful, the agent calls
+  `find_attractions` separately (known district, interests, indoor setting for a rainy backup,
+  `comparison.available_minutes` capped to the window); both calls show in `/chat.tool_calls`.
+  Weather-only requests can stop after the weather call, and earlier attraction results can be
+  reused. An indoor outing is an alternative for the window, not extra stops. A failed
+  attraction lookup leaves the weather result available; the legacy `backup_spots` field stays
+  empty.
+- **Warnings:** current warnings are separate from future-date forecasts. A warning covering
+  today's city sets `postpone_outing` ([CWA typhoon precautions](https://www.cwa.gov.tw/V8/C/K/Encyclopedia/typhoon/typhoon.pdf)).
+  An unavailable warning feed is not "no warning". Dates beyond the forecast get a seasonal
+  note; gaps within it are reported as missing forecasts.
 
-`forecast` keeps the daily summary; `comparison` considers only intervals overlapping the outing,
-including overnight periods starting the previous day. Weather elements align by timestamp,
-not array index. Below 40% rain favors outdoor activities, 40–69% keeps plans flexible,
-and 70%+ favors indoor activities. These are app planning heuristics, not CWA warning levels
-or estimates of rainfall intensity. Different periods can yield a split plan; missing values
-and incomplete coverage never become an all-clear. The [CWA product specification](https://opendata.cwa.gov.tw/opendatadoc/Forecast/F-D0047-001_093.pdf)
-describes 12-hour weekly intervals and rain probabilities limited to the first three days;
-the tool does not invent hourly probabilities for a shorter outing.
-
-The weather tool performs no attraction or TDX lookup and names no places. The agent decides
-whether an attraction search would help, based on the request, forecast, and saved preferences.
-When useful, it calls `find_attractions` separately with the known district, interests, indoor
-setting for a rainy backup, and `comparison.available_minutes` (capped to the explicit window).
-Both calls appear in `/chat.tool_calls` and the chat display. Weather-only requests can end
-after the weather call; previously retrieved attraction results can also be reused.
-The attraction tool supplies its own comparison, estimated outing timeline, and sources.
-The indoor outing is an alternative for the window, not extra stops added to an outdoor plan.
-Failed attraction lookups leave the weather result available. The legacy `backup_spots` field
-stays empty; attraction pins come from the separate search.
-
-Current warnings are separate from future-date forecasts. A warning covering today's city
-sets `postpone_outing`, consistent with [CWA typhoon precautions](https://www.cwa.gov.tw/V8/C/K/Encyclopedia/typhoon/typhoon.pdf).
-An unavailable warning feed is distinct from no warning. Dates beyond the forecast get a
-seasonal note; gaps within the near-term feed are reported as missing forecasts.
-
-| Can compare | Missing information / limits |
+| Can compare | Limits |
 |---|---|
 | Time-window comparison, rain chance, temperature, current warning, activity strategy | Forecast periods are broad, not hourly; rain probabilities can be absent; warnings are current; place searches are separate |
 
 ### Crowds (`crowd_risk_check`)
 
-`crowd_risk_check` compares day types with 2026 TRA station-entry counts through September 1.
-For each historical date, the [calibration script](../scripts/calibrate_crowd_risk.py) divides
-total entries by the median on ordinary days of the same weekday within 56 days. A pattern needs
-at least five sampled days and a median ratio of 1.2 or higher for a high rating. The pre-break
-days meet that threshold; first and last days of long breaks do not. The
-[compact calibration](../tools/data/crowd_calibration.json) is bundled, so normal lookups only
-download the annual calendar. Run `uv run python scripts/calibrate_crowd_risk.py` to refresh the
-calibration from the official files. Station entries are a network-wide proxy, not train
-occupancy, HSR demand, or a route-specific forecast.
+Compares day types with 2026 TRA station-entry counts through September 1. The
+[calibration script](../scripts/calibrate_crowd_risk.py) divides each date's total entries by the
+median of ordinary same-weekday days within 56 days; a high rating needs at least five sampled
+days and a median ratio of 1.2 or more. Pre-break days meet it; first and last days of long
+breaks do not. The [compact calibration](../tools/data/crowd_calibration.json) is bundled, so
+lookups only download the annual calendar; refresh it with
+`uv run python scripts/calibrate_crowd_risk.py`.
 
-| Can compare | Missing information / limits |
+| Can compare | Limits |
 |---|---|
-| Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate, not route occupancy or HSR demand |
+| Holiday pattern, estimated risk/reason, historical ratio and sample size | Preliminary TRA network estimate (a network-wide proxy), not route occupancy, HSR demand or a route-specific forecast |
 
 ### Exchange (`twd_exchange`)
 
-Exchange comparison uses today plus available 7/14/21/28-day snapshots, not 30 daily rates.
-`sampled_average`, `comparison_method`, and `comparison_status` describe it; legacy `avg_30d`
-and `vs_30d` fields remain for compatibility. Without historical samples, the conversion is
-still returned, while the average/difference are null and comparison is unavailable.
+Compares today with available 7/14/21/28-day snapshots, not 30 daily rates (`sampled_average`,
+`comparison_method`, `comparison_status`; legacy `avg_30d`/`vs_30d` remain). Without historical
+samples the conversion is still returned, with a null average/difference and comparison
+unavailable.
 
-| Can compare | Missing information / limits |
+| Can compare | Limits |
 |---|---|
 | Rate, rate date, converted amount, sampled historical comparison | Mid-market snapshot; no actual cash-counter quote or travel prices; average uses weekly samples |
 
