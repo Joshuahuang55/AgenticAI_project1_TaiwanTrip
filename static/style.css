@@ -226,6 +226,7 @@ main {
 }
 #map { height: 320px; border: 1px solid var(--line); background: #e9e5dc; }
 #map-note { display: block; padding-top: 0.35rem; color: var(--muted); font-size: 0.75rem; }
+#map-note[hidden] { display: none; }
 .legend { display: flex; gap: 0.8rem; font-family: var(--sans); font-size: 0.75rem; font-weight: 400; color: var(--ink-2); }
 .legend span::before {
     content: "";

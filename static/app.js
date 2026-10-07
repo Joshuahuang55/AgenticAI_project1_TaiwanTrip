@@ -317,19 +317,21 @@ async function loadBasemap() {
     const controller = new AbortController();
     let settled = false;
     let vector;
+    const note = (text) => { $("map-note").textContent = text; $("map-note").hidden = !text; };
     const fallback = () => {
         if (settled) return;
         settled = true;
         clearTimeout(deadline);
         controller.abort();
         // Set the message first so even a renderer cleanup error cannot leave "Loading…".
-        $("map-note").textContent = "English map unavailable; showing the standard map without labels";
+        note("Showing a plain map; map labels couldn't load.");
         if (vector) {
             try { map.removeLayer(vector); } catch {}
         }
     };
-    // Covers script downloads, style requests and renderer readiness together.
-    const deadline = setTimeout(fallback, 20000);
+    // Covers downloading the renderer and style only. Once the vector map is added it is kept,
+    // however long its tiles take; the label-free map stays underneath until it has drawn.
+    const deadline = setTimeout(fallback, 30000);
     try {
         if (!window.maplibregl) {
             const css = document.createElement("link");
@@ -354,20 +356,21 @@ async function loadBasemap() {
                 ["!=", ["coalesce", ["get", name], ""], ""], ["get", name],
             ]), ""];
         }
+        // Throws without WebGL, which falls back to the label-free map.
         vector = L.maplibreGL({ style }).addTo(map);
+        settled = true;
+        clearTimeout(deadline);
+        note("");
         const renderer = vector.getMaplibreMap();
         const ready = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(deadline);
+            if (basemap === vector) return;
             basemap = vector;
             map.removeLayer(raster);
-            $("map-note").textContent = "English labels; places without an English name are unlabeled";
         };
         renderer.once("load", ready);
         // Already-loaded renderers and cached styles need no second load event.
         if (renderer.loaded?.()) ready();
-        renderer.on("error", fallback);
+        // A missing tile or font is not fatal; the rest of the map still draws.
     } catch { fallback(); }
 }
 if (map) loadBasemap();

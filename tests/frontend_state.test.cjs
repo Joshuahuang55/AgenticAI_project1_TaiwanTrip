@@ -133,23 +133,33 @@ test("vector labels are English or romanized, never the local script, and keep s
     assert.equal(evaluate(expression, { name_int: "Taibei", name: "臺北" }), "Taibei");
     assert.equal(evaluate(expression, { name: "臺北" }), "");
     assert.deepEqual(style.layers[1].layout["text-field"], ["get", "ref"]);
-    assert.match(get("map-note").textContent, /English labels/);
+    assert.equal(get("map-note").textContent, "");
+    assert.equal(get("map-note").hidden, true);
 });
 
-test("stalled vector readiness exits loading without losing the standard map", async () => {
+test("a slow-drawing English map is kept instead of being replaced by the fallback", async () => {
     let expire;
     const { get } = harness({}, async () => ({ ok: true, json: async () => ({ layers: [] }) }),
         { stall: true }, { setTimeout: (callback) => { expire = callback; return 1; }, clearTimeout() {} });
     await new Promise((resolve) => setImmediate(resolve));
+    expire?.();
+    assert.doesNotMatch(get("map-note").textContent, /plain map|Loading/);
+});
+
+test("a map style that never arrives falls back to the plain map after the deadline", async () => {
+    let expire;
+    const { get } = harness({}, () => new Promise(() => {}), true,
+        { setTimeout: (callback) => { expire = callback; return 1; }, clearTimeout() {} });
+    await new Promise((resolve) => setImmediate(resolve));
     expire();
-    assert.match(get("map-note").textContent, /English map unavailable/);
+    assert.match(get("map-note").textContent, /plain map/);
     assert.doesNotMatch(get("map-note").textContent, /Loading/);
 });
 
 test("unavailable renderer scripts show the fallback without blocking chat", async () => {
     const { get, app } = harness();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.match(get("map-note").textContent, /standard map/);
+    assert.match(get("map-note").textContent, /plain map/);
     assert.equal(app.pending(), false);
 });
 
