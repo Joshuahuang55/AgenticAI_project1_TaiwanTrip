@@ -146,7 +146,7 @@ and recommended/alternative roles; changed proposals replace earlier pins for th
 The Leaflet map uses [OpenFreeMap](https://openfreemap.org/quick_start/) vector tiles through
 MapLibre GL, labelled with English names, then romanized names (`name_int`, `name:latin`); places
 with neither stay unlabeled rather than showing Chinese. No additional API key is needed. A
-label-free [Esri Light Gray](https://www.arcgis.com/home/item.html?id=ed712cb1db3e4bae9e85329040fb9a49) raster map appears immediately while vector assets load asynchronously, so map downloads do not block chat. A 20-second deadline covers scripts, style, and renderer readiness; failures keep the label-free map. Map/CDN requests go to their public providers.
+label-free [Esri Light Gray](https://www.arcgis.com/home/item.html?id=ed712cb1db3e4bae9e85329040fb9a49) raster map appears immediately while vector assets load asynchronously, so map downloads do not block chat. `index.html` preloads the MapLibre scripts and style in parallel. A 30-second deadline covers only those downloads; once the vector map is added it is kept however long its tiles take, and it replaces the label-free map when it has drawn. Single tile or font errors are not fatal. Only a failed download or missing WebGL keeps the label-free map, with a short note under it; otherwise no note is shown. Map/CDN requests go to their public providers.
 
 The panel shows English only: tools add `holiday_name_en` and `weather_en`, and lodging fills
 `name_en` (and `run_tool` adds `name_en`/`district_en` to every listed place) with `english_name` ([tools/english_labels.py](../tools/english_labels.py)),
