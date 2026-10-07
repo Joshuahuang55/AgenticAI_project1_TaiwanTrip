@@ -5,7 +5,8 @@ lives there. Instead of guessing, it checks official Taiwanese open data: whethe
 registered, where locals eat, what to see, which train to take, whether a holiday will make travel
 busy, whether rain or a typhoon is coming, and what your budget is worth in TWD.
 
-- **Live app:** https://agenticai-project1-taiwantrip-git-353565629353.europe-west1.run.app (authorized Google accounts only; ask the team for access, see [Deploy and access](docs/DESIGN.md#deploy-and-access))
+- **Live app:** https://agenticai-project1-taiwantrip-git-353565629353.europe-west1.run.app
+- **Access:** start with the [sample questions](#how-to-use) below. The live agent is for authorized Google accounts; to get access, see [Deploy and access](docs/DESIGN.md#deploy-and-access).
 - **Team Members:** ch4000, nw2608, lc4021
 
 ## Tools
@@ -51,7 +52,7 @@ Each answer ends with a **Next:** suggestion you can type as a follow-up, such a
 
 | | What we added |
 |---|---|
-| **Our own data** | Popularity rankings that the official listings lack, built by our scripts in [`scripts/`](scripts/): Wikipedia-based fame for sights, 48,401 restaurants from OpenStreetMap, Michelin and 500盤/500碗 award lists, 226 local favorites labelled by a model and reviewed by hand ([`data/local_review.csv`](data/local_review.csv)), and a crowd calibration from official railway ridership. |
+| **Our own data** | Popularity rankings that the official listings lack, built by our scripts in [`scripts/`](scripts/): Wikipedia-based fame for sights, 48,485 restaurants from OpenStreetMap, Michelin and 500 Dishes/500 Bowls award lists, 99 well-known restaurants without awards ([`data/known_food_review.csv`](data/known_food_review.csv)) and 226 local favorite sights ([`data/local_review.csv`](data/local_review.csv)), both listed or labelled by a model and reviewed by a second model, and a crowd calibration from official railway ridership. |
 | **Guardrails** | Four layers on the OpenAI Agents SDK: input (off-topic, prompt injection, harmful requests), tool input (oversized arguments), tool output (injected instructions in data), and output (prompt leaks, stays no lookup returned, untrusted links). See [`guardrails.py`](guardrails.py). |
 | **Memory** | Beyond chat history, each session keeps the trip's city, dates, budget, diet and interests, each backed by a quote from the user, and the places already suggested, so follow-ups like "the second one" work. |
 | **Grounded answers** | Replies are structured: every recommended place and source must match a real lookup in the session, and only those places are pinned on the map. |
@@ -85,7 +86,8 @@ Gemini runs on Vertex AI, so you need a GCP project with the Vertex AI API enabl
 
 ## More
 
-[`docs/DESIGN.md`](docs/DESIGN.md) has the full details: tool rules, agent design, guardrail table,
-data sources and licences, the lookup budget, and the project layout.
+[`docs/DESIGN.md`](docs/DESIGN.md) has the full details: the agent's decision flow, a decision-flow diagram
+for food and for sights, tool rules, agent design and memory, the guardrail table, data sources and
+licences, the lookup budget, deployment and access, and the project layout.
 
-The Michelin and 500盤/500碗 data are used for research and education only, as their sources require.
+The Michelin and 500 Dishes/500 Bowls data are used for research and education only, as their sources require.
