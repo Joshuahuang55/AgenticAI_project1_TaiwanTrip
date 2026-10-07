@@ -34,14 +34,14 @@ How the agent turns a travel question into an answer. The rules come from
 [prompts/system.txt](../prompts/system.txt); details are in [Agent design](#agent-design).
 
 ```mermaid
-flowchart TD
-    Q[User question] --> U["1 Understand the request<br/>task type, plus saved trip context:<br/>city, dates, budget, diet, interests, outing window"]
-    U -->|required detail missing<br/>e.g. a date for trains| ASK[Ask for it first;<br/>answer any part that needs no lookup]
-    U --> P["2 Choose lookups<br/>only the tools this request needs, in its own order;<br/>reuse matching results from this session"]
-    P --> T["3 Tools search, filter and rank in Python<br/>return ranked picks, comparisons,<br/>more candidates and missing facts"]
-    T --> C["4 Compare and choose<br/>best overall fit for the user, not automatically<br/>the first result; only returned places"]
-    C --> A["5 Answer<br/>choices with reasons first,<br/>one short note on relevant gaps"]
-    A --> N["6 Close<br/>at most one refinement question,<br/>one Next: line offering a complementary lookup"]
+flowchart LR
+    Q[User question] --> U["Understand<br/>task type + saved trip context<br/>city, dates, budget, diet, interests"]
+    U -->|"required detail missing<br/>(e.g. a date for trains)"| ASK["Ask for it<br/>answer what needs no lookup"]
+    U --> P["Choose lookups<br/>only the tools this needs<br/>reuse session results"]
+    P --> T["Tools search and rank<br/>picks, comparisons,<br/>more candidates, gaps"]
+    T --> C["Choose<br/>best fit for the user<br/>returned places only"]
+    C --> A["Answer<br/>choices and reasons<br/>one short gap note"]
+    A --> N["Close<br/>≤ 1 question<br/>Next: line"]
 ```
 
 Typical combinations: a focused request uses one tool; a whole trip may combine a base
@@ -54,18 +54,18 @@ What happens to one `/chat` message in the code ([app.py](../app.py),
 [guardrails.py](../guardrails.py)):
 
 ```mermaid
-flowchart TD
-    M[POST /chat message] --> Q{Tool budget left?}
-    Q -->|no| R429[HTTP 429, no model call]
-    Q -->|yes| IG["User-message check (input guardrail)<br/>length, injection, harmful, off-topic"]
-    IG -->|fails| FIX1[Fixed reply; message kept out of history]
-    IG -->|passes| X["Trip context extraction<br/>saves stated preferences with quotes"]
-    X --> AG["Main agent (Gemini via LiteLLM)<br/>dynamic instructions include trip and planning context"]
-    AG <--> TL["Tool calls<br/>argument check, then result check<br/>(tool input/output guardrails)"]
-    AG --> OG["Answer check (output guardrail)<br/>prompt leak, ungrounded lodging names"]
+flowchart LR
+    M[POST /chat] --> Q{Tool budget<br/>left?}
+    Q -->|no| R429[HTTP 429<br/>no model call]
+    Q -->|yes| IG["Check user message<br/>(input guardrail)"]
+    IG -->|fails| FIX1["Fixed reply<br/>not saved to history"]
+    IG -->|passes| X["Extract trip<br/>context"]
+    X --> AG["Main agent<br/>Gemini via LiteLLM"]
+    AG <--> TL["Tools<br/>arguments and results<br/>checked"]
+    AG --> OG["Check answer<br/>(output guardrail)"]
     OG -->|fails| FIX2[Fixed reply]
-    OG -->|passes| L["Link cleanup<br/>unverified links removed"]
-    L --> OUT["Reply: message, tool_calls,<br/>places and map pins from the structured reply"]
+    OG -->|passes| L["Remove<br/>unverified links"]
+    L --> OUT["Reply, tool calls,<br/>places, map pins"]
 ```
 
 At most 8 model turns per message. A turn has a 180-second deadline. Rejected or failed turns
@@ -263,11 +263,11 @@ flowchart LR
 - **Filter:** keyword matches the Chinese name, English name or OSM cuisine tag.
 - **Scores** ([scripts/build_food_fame.py](../scripts/build_food_fame.py)):
   - Fame is the strongest signal: Michelin 3 stars 1.0, 2 stars 0.95, 1 star 0.9, Bib Gourmand
-    0.75, Selected 0.6; 500盤/500碗 by plates or bowls on a log scale; 0.7 for a reviewed
+    0.75, Selected 0.6; 500 Dishes/500 Bowls by plates or bowls on a log scale; 0.7 for a reviewed
     well-known place without awards; 0.2 for an OSM English name alone.
-  - Local is max(500盤, 500碗) × (1 − Michelin score); chains (a name on 5+ OSM places) get 0.3
+  - Local is max(500 Dishes, 500 Bowls) × (1 − Michelin score); chains (a name on 5+ OSM places) get 0.3
     of it. Awards last listed in 2024 count 0.7, earlier ones 0.5. `style: local` ranks by it.
-  - Fine dining is a Michelin star, $$$ or higher, or a 500盤 place that neither 500碗 nor a
+  - Fine dining is a Michelin star, $$$ or higher, or a 500 Dishes place that neither 500 Bowls nor a
     Michelin $–$$ price marks as everyday food. Unless asked for (Michelin, omakase, tasting
     menu…), it fills at most a third of the results.
   - A manual closed list (e.g. RAW) removes places the data still lists.
@@ -526,11 +526,11 @@ Each has a build script; none is needed at runtime. They are rebuilt by hand, no
 | `extra_attractions.json` | same | 1,376 sights the register lacks (駁二, 花園夜市), not closed | Wikidata (CC0) |
 | `local_favorites.json` | [scripts/label_local_favorites.py](../scripts/label_local_favorites.py) | 226 places labeled as where locals go: Qwen labels, then a second review ([data/local_review.csv](../data/local_review.csv)) | Model labels |
 | `osm_food.json.gz` | [scripts/build_osm_food.py](../scripts/build_osm_food.py) | 48,485 restaurants, cafes and stalls; street address for 43%, district estimated from the nearest official listing for 97% | © OpenStreetMap contributors, [ODbL 1.0](https://www.openstreetmap.org/copyright) |
-| `food_fame.json` | [scripts/build_food_fame.py](../scripts/build_food_fame.py) | Food fame and local score, awards per place, and 371 Michelin restaurants OSM lacks | Michelin Guide Taiwan via [michelin-my-maps](https://github.com/ngshiheng/michelin-my-maps); 500盤 and 500碗 lists by 500輯 (udn), in `data/food_awards/` |
+| `food_fame.json` | [scripts/build_food_fame.py](../scripts/build_food_fame.py) | Food fame and local score, awards per place, and 371 Michelin restaurants OSM lacks | Michelin Guide Taiwan via [michelin-my-maps](https://github.com/ngshiheng/michelin-my-maps); 500 Dishes (500盤) and 500 Bowls (500碗) lists by 500輯 (udn), in `data/food_awards/` |
 | `data/food_awards/known_food.json` | [scripts/list_known_food.py](../scripts/list_known_food.py) | 99 well-known places without awards: listed by Gemini, checked against OSM, reviewed ([data/known_food_review.csv](../data/known_food_review.csv)) | Model list |
 
 **Research and education use only.** This is a course project. The Michelin Guide data
-(michelin-my-maps states its data is for research use only) and the 500盤/500碗 lists (© 500輯)
+(michelin-my-maps states its data is for research use only) and the 500 Dishes/500 Bowls lists (© 500輯)
 are used for research and education, not commercially, and are not redistributed for other use.
 Remove `food_fame.json` and `data/food_awards/` before any commercial use; the food tool then
 ranks by OpenStreetMap order.
