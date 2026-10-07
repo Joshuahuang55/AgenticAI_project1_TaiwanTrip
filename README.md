@@ -5,7 +5,7 @@ lives there. Instead of guessing, it checks official Taiwanese open data: whethe
 registered, where locals eat, what to see, which train to take, whether a holiday will make travel
 busy, whether rain or a typhoon is coming, and what your budget is worth in TWD.
 
-- **Live app:** https://agenticai-project1-taiwantrip-git-353565629353.europe-west1.run.app
+- **Live app:** https://agenticai-project1-taiwantrip-git-353565629353.europe-west1.run.app (authorized Google accounts only; ask the team for access, see [Deploy and access](docs/DESIGN.md#deploy-and-access))
 - **Team Members:** ch4000, nw2608, lc4021
 
 ## Tools
